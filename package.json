@@ -12,7 +12,7 @@
   "version": "1.0.0",
   "main": "add-missing-columns.js",
   "scripts": {
-    "build": "cd flutter-nest-househelp-master && npm install --legacy-peer-deps --include=dev && rm -rf dist && npm run build",
+    "build": "cd flutter-nest-househelp-master && npm install --legacy-peer-deps --include=dev && rm -rf dist && rm -f *.tsbuildinfo && npm run build",
     "start": "cd flutter-nest-househelp-master && npm run start",
     "start:dev": "cd flutter-nest-househelp-master && npm run start:dev",
     "start:prod": "cd flutter-nest-househelp-master && npm run start:prod",
