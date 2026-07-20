@@ -1,0 +1,277 @@
+import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+import { UsersModule } from './users/users.module';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuthModule } from './auth/auth.module';
+import { ServicesModule } from './services/services.module';
+import { WorkersModule } from './workers/workers.module';
+import { SlotsModule } from './slots/slots.module';
+import { BookingsModule } from './bookings/bookings.module';
+import { PaymentsModule } from './payments/payments.module';
+import { ReviewsModule } from './reviews/reviews.module';
+import { LocationsModule } from './locations/locations.module';
+import { ServiceRequestsModule } from './service-requests/service-requests.module';
+import { SystemStatusModule } from './system-status/system-status.module';
+import { HomeModule } from './home/home.module';
+import { HealthModule } from './health/health.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import {
+  PrometheusModule,
+  makeCounterProvider,
+  makeHistogramProvider,
+} from '@willsoto/nestjs-prometheus';
+import { DatabaseModule } from './database/database.module';
+import { ServiceProfilesModule } from './service-profiles/service-profiles.module';
+import { AdminModule } from './admin/admin.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { AddressesModule } from './addresses/addresses.module';
+import { WorkerLeavesModule } from './worker-leaves/worker-leaves.module';
+import { User } from './users/entities/user.entity';
+import { FcmGuestToken } from './users/entities/fcm-guest-token.entity';
+import { Service } from './services/entities/service.entity';
+import { Worker } from './workers/entities/worker.entity';
+import { Slot } from './slots/entities/slot.entity';
+import { Booking } from './bookings/entities/booking.entity';
+import { Payment } from './payments/entities/payment.entity';
+import { Review } from './reviews/entities/review.entity';
+import { MicroZone } from './locations/entities/micro_zone.entity';
+import { ServiceArea } from './locations/entities/service_area.entity';
+import { Waitlist } from './locations/entities/waitlist.entity';
+import { ServiceRequest } from './service-requests/entities/service-request.entity';
+import { ServiceProfile } from './service-profiles/entities/service-profile.entity';
+import { Subscription } from './subscriptions/entities/subscription.entity';
+import { WorkerLeave } from './worker-leaves/entities/worker-leave.entity';
+import { AuditModule } from './audit/audit.module';
+
+import { AdminUser } from './admin/entities/admin-user.entity';
+import { AuditLog } from './audit/entities/audit-log.entity';
+import { FinanceModule } from './finance/finance.module';
+import { SupportModule } from './support/support.module';
+import { SystemConfigModule } from './config/config.module';
+import { AdvertisementsModule } from './advertisements/advertisements.module';
+import { Advertisement } from './advertisements/entities/advertisement.entity';
+import { ValidationExceptionFilter } from './common/filters/validation-exception.filter';
+import { ResponseTimeInterceptor } from './common/interceptors/response-time.interceptor';
+import { SupportTicket } from './support/entities/support-ticket.entity';
+import { CommunicationLog } from './support/entities/communication-log.entity';
+import { NotificationTemplate } from './config/entities/notification-template.entity';
+import { BusinessHours } from './config/entities/business-hours.entity';
+import { PricingRule } from './config/entities/pricing-rule.entity';
+import { Payout } from './finance/entities/payout.entity';
+import { Refund } from './finance/entities/refund.entity';
+import { Address } from './addresses/entities/address.entity';
+import { RefreshToken } from './auth/entities/refresh-token.entity';
+
+// Reliability Services
+import { IdempotencyGuard } from './common/guards/idempotency.guard';
+import { CircuitBreakerService } from './common/services/circuit-breaker.service';
+import { CacheService } from './common/services/cache.service';
+import { DistributedLockService } from './common/services/distributed-lock.service';
+import { AsyncWorkerPoolService } from './common/services/async-worker-pool.service';
+import { ObservabilityService } from './common/services/observability.service';
+
+@Module({
+  imports: [
+    ThrottlerModule.forRoot({
+      throttlers: [
+        {
+          ttl: 60000, // 1 minute
+          limit: 100, // 100 requests per minute
+        },
+      ],
+    }),
+    PrometheusModule.register(),
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
+    TypeOrmModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => {
+        // Support both DATABASE_URL (Railway) and individual DB_* variables
+        const databaseUrl = configService.get('DATABASE_URL');
+        
+        let host = '';
+        let port = 5432;
+        let username = '';
+        let password = '';
+        let database = '';
+        
+        // Always try to parse valid DATABASE_URL first when provided
+        // Fallback to individual DB_* variables only if parsing fails
+        if (databaseUrl) {
+          // Parse DATABASE_URL (format: postgres://user:pass@host:port/database)
+          console.log('🔍 Railway DATABASE_URL detected, parsing...');
+          try {
+            const url = new URL(databaseUrl);
+            host = url.hostname;
+            port = parseInt(url.port) || 5432;
+            username = decodeURIComponent(url.username);
+            password = decodeURIComponent(url.password);
+            // Handle both path-based and socket-based URLs
+            let dbPath = url.pathname.replace('/', '');
+            if (dbPath && !dbPath.includes('.')) {
+              database = dbPath;
+            } else {
+              // Fall back to DB_NAME env or default
+              database = configService.get('DB_NAME', 'railway');
+            }
+            console.log('📊 Parsed Railway DB config:', { host, port, username, database: '***', hasPassword: !!password });
+          } catch (e) {
+            console.error('❌ Failed to parse DATABASE_URL:', e.message);
+            // If URL parsing fails, use fallback
+            database = configService.get('DB_NAME', 'railway');
+            host = configService.get('DB_HOST', 'localhost');
+          }
+        }
+        // Fallback to individual DB_* variables only if no DATABASE_URL was provided or parsing failed
+        if (!host || !database) {
+          host = configService.get('DB_HOST', 'localhost');
+          port = configService.get<number>('DB_PORT', 5432);
+          username = configService.get('DB_USERNAME', 'sevaq_user');
+          password = configService.get('DB_PASSWORD', 'sevaq_password');
+          database = configService.get('DB_NAME', 'sevaq_db');
+        }
+
+        // Trim any trailing carriage returns or whitespaces from parsed variables
+        if (host) host = host.trim();
+        if (username) username = username.trim();
+        if (password) password = password.trim();
+        if (database) database = database.trim();
+
+        console.log('🔧 Final DB config:', { host, port, username, database: '***', hasPassword: !!password });
+
+        const entities = [
+          User,
+          FcmGuestToken,
+          Service,
+          Worker,
+          Slot,
+          Booking,
+          Payment,
+          Review,
+          MicroZone,
+          ServiceArea,
+          Waitlist,
+          ServiceRequest,
+          ServiceProfile,
+          Subscription,
+          WorkerLeave,
+          AdminUser,
+          AuditLog,
+          SupportTicket,
+          CommunicationLog,
+          NotificationTemplate,
+          BusinessHours,
+          PricingRule,
+          Payout,
+          Refund,
+          Address,
+          RefreshToken,
+          Advertisement,
+         ];
+
+        return {
+          type: 'postgres',
+          host: host,
+          port: port,
+          username: username,
+          password: password,
+          database: database,
+          entities: entities,
+          // ❗ PRODUCTION SAFETY: NEVER enable synchronize in production
+          // This will DESTROY all production data if enabled
+          // Only enable this locally for development, never on Railway
+          // ✅ HARD LOCK: NO ENVIRONMENT VARIABLE CAN OVERRIDE THIS
+          synchronize: host === '127.0.0.1' || host === 'localhost' || (process.env.NODE_ENV === 'development' && process.env.SYNCHRONIZE === 'true'),
+          logging: ['error', 'warn'], // Reduce logging to only errors and warnings
+          logger: 'advanced-console', // Use advanced console logger
+          // Railway Postgres SSL configuration - required for external connections
+          ssl: process.env.DB_SSL_REQUIRE === 'true' ? {
+            rejectUnauthorized: false
+          } : false,
+          // Connection pool configuration for Railway
+          extra: {
+            max: process.env.NODE_ENV === 'production' ? 15 : 10,
+            idleTimeoutMillis: 30000, // 30 seconds - give more time before closing idle connections
+            connectionTimeoutMillis: 8000,
+            keepAlive: true,
+            keepAliveInitialDelayMillis: 5000,
+            statement_timeout: 15000,
+            query_timeout: 15000,
+          },
+        };
+      },
+      inject: [ConfigService],
+    }),
+    UsersModule,
+    AuthModule,
+    ServicesModule,
+    WorkersModule,
+    SlotsModule,
+    BookingsModule,
+    PaymentsModule,
+    ReviewsModule,
+    LocationsModule,
+    ServiceRequestsModule,
+    SystemStatusModule,
+    HealthModule,
+    NotificationsModule,
+    HomeModule,
+    ServiceProfilesModule,
+    SubscriptionsModule,
+    AdminModule,
+    AdvertisementsModule,
+    // MetricsModule - DISABLED: Broken driver connection causing constant warning logs
+    AuditModule,
+    // AnalyticsModule - DISABLED: Empty unused module
+    // MonitoringModule - DISABLED: Duplicate monitoring
+    FinanceModule,
+    SupportModule,
+    SystemConfigModule,
+    AddressesModule,
+    WorkerLeavesModule,
+    // DatabaseModule,
+  ],
+  controllers: [AppController],
+  providers: [
+    AppService,
+    CircuitBreakerService,
+    CacheService,
+    DistributedLockService,
+    AsyncWorkerPoolService,
+    ObservabilityService,
+    {
+      provide: 'APP_FILTER',
+      useClass: ValidationExceptionFilter,
+    },
+    makeHistogramProvider({
+      name: 'http_request_duration_seconds',
+      help: 'Duration of HTTP requests in seconds',
+      labelNames: ['method', 'endpoint', 'status_code'],
+      buckets: [0.1, 0.5, 1, 2, 5, 10],
+    }),
+    makeCounterProvider({
+      name: 'http_requests_total',
+      help: 'Total number of HTTP requests',
+      labelNames: ['method', 'endpoint'],
+    }),
+    makeCounterProvider({
+      name: 'http_requests_errors_total',
+      help: 'Total number of HTTP request errors',
+      labelNames: ['method', 'endpoint', 'status_code'],
+    }),
+    {
+      provide: 'APP_GUARD',
+      useClass: ThrottlerGuard,
+    },
+    {
+      provide: 'APP_INTERCEPTOR',
+      useClass: ResponseTimeInterceptor,
+    },
+  ],
+})
+export class AppModule {}

@@ -1,0 +1,316 @@
+import { Controller, Get, Post, Put, Patch, Delete, Param, Query, Body, UseGuards, Request, BadRequestException } from '@nestjs/common';
+import { AdminService } from './admin.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AdminGuard } from '../auth/admin.guard';
+import { BookingStatus } from '../bookings/entities/booking.entity';
+
+@Controller('admin')
+@UseGuards(JwtAuthGuard, AdminGuard)
+export class AdminController {
+  constructor(private readonly adminService: AdminService) {}
+
+  // ============================================
+  // Dashboard Statistics
+  // ============================================
+
+  /**
+   * Get comprehensive dashboard statistics
+   * GET /admin/dashboard
+   */
+  @Get('dashboard')
+  async getDashboardStats() {
+    return this.adminService.getDashboardStats();
+  }
+
+  // ============================================
+  // Worker Management
+  // ============================================
+
+  /**
+   * Get all workers with optional filters
+   * GET /admin/workers
+   */
+  @Get('workers')
+  async getAllWorkers(
+    @Query('isAvailable') isAvailable?: string,
+    @Query('minRating') minRating?: string,
+    @Query('serviceId') serviceId?: string,
+  ) {
+    return this.adminService.getAllWorkers({
+      isAvailable: isAvailable ? isAvailable === 'true' : undefined,
+      minRating: minRating ? parseFloat(minRating) : undefined,
+      serviceId,
+    });
+  }
+
+  /**
+   * Get worker by ID
+   * GET /admin/workers/:id
+   */
+  @Get('workers/:id')
+  async getWorkerById(@Param('id') id: string) {
+    return this.adminService.getWorkerById(parseInt(id, 10));
+  }
+
+  /**
+   * Update worker details
+   * PUT /admin/workers/:id
+   */
+  @Put('workers/:id')
+  async updateWorker(
+    @Param('id') id: string,
+    @Body() updates: any,
+  ) {
+    return this.adminService.updateWorker(parseInt(id, 10), updates);
+  }
+
+  /**
+   * Toggle worker availability
+   * PATCH /admin/workers/:id/availability
+   */
+  @Patch('workers/:id/availability')
+  async toggleWorkerAvailability(
+    @Param('id') id: string,
+    @Body('isAvailable') isAvailable: boolean,
+  ) {
+    return this.adminService.toggleWorkerAvailability(parseInt(id, 10), isAvailable);
+  }
+
+  // ============================================
+  // Booking Management
+  // ============================================
+
+  /**
+   * Get all bookings with optional filters
+   * GET /admin/bookings
+   */
+  @Get('bookings')
+  async getAllBookings(
+    @Query('status') status?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('workerId') workerId?: string,
+    @Query('userId') userId?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.adminService.getAllBookings({
+      status: status as BookingStatus,
+      startDate,
+      endDate,
+      workerId: workerId ? parseInt(workerId, 10) : undefined,
+      userId,
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
+  }
+
+  /**
+   * Get all unassigned bookings (workerId IS NULL)
+   * GET /admin/bookings/unassigned
+   * NOTE: This must come BEFORE bookings/:id to avoid route conflict
+   */
+  @Get('bookings/unassigned')
+  async getUnassignedBookings() {
+    return this.adminService.getUnassignedBookings();
+  }
+
+  /**
+   * Get booking by ID
+   * GET /admin/bookings/:id
+   */
+  @Get('bookings/:id')
+  async getBookingById(@Param('id') id: string) {
+    return this.adminService.getBookingById(id);
+  }
+
+  /**
+   * Update booking status
+   * PATCH /admin/bookings/:id/status
+   */
+  @Patch('bookings/:id/status')
+  async updateBookingStatus(
+    @Param('id') id: string,
+    @Body('status') status: BookingStatus,
+  ) {
+    return this.adminService.updateBookingStatus(id, status);
+  }
+
+  /**
+   * Cancel a booking
+   * POST /admin/bookings/:id/cancel
+   */
+  @Post('bookings/:id/cancel')
+  async cancelBooking(
+    @Param('id') id: string,
+    @Body('reason') reason?: string,
+  ) {
+    return this.adminService.cancelBooking(id, reason);
+  }
+
+  /**
+   * Manually assign a worker to a booking
+   * POST /admin/bookings/:id/assign
+   */
+  @Post('bookings/:id/assign')
+  async assignBooking(
+    @Param('id') id: string,
+    @Body() body: { workerId: number; notes?: string },
+    @Request() req: any,
+  ) {
+    if (!body.workerId) {
+      throw new BadRequestException('workerId is required');
+    }
+    const adminId = req.user?.id || 'admin';
+    return this.adminService.manualAssignBooking(id, body.workerId, adminId, body.notes);
+  }
+
+  // ============================================
+  // Analytics
+  // ============================================
+
+  /**
+   * Get revenue analytics
+   * GET /admin/analytics/revenue
+   */
+  @Get('analytics/revenue')
+  async getRevenueAnalytics(@Query('period') period?: 'day' | 'week' | 'month' | 'year') {
+    return this.adminService.getRevenueAnalytics(period);
+  }
+
+  /**
+   * Get booking analytics
+   * GET /admin/analytics/bookings
+   */
+  @Get('analytics/bookings')
+  async getBookingAnalytics() {
+    return this.adminService.getBookingAnalytics();
+  }
+
+  // ============================================
+  // User Management
+  // ============================================
+
+  /**
+   * Get all users
+   * GET /admin/users
+   */
+  @Get('users')
+  async getAllUsers() {
+    return this.adminService.getAllUsers();
+  }
+
+  /**
+   * Get user by ID
+   * GET /admin/users/:id
+   */
+  @Get('users/:id')
+  async getUserById(@Param('id') id: string) {
+    return this.adminService.getUserById(id);
+  }
+
+  // ============================================
+  // Worker Profile Management
+  // ============================================
+
+  /**
+   * Create worker profile for existing user
+   * POST /admin/workers/by-email
+   */
+  @Post('workers/by-email')
+  async createWorkerProfileByEmail(@Body() body: { email: string; bio?: string; serviceIds?: string[]; latitude?: number; longitude?: number }) {
+    return this.adminService.createWorkerProfileForUser(
+      body.email,
+      body.bio || '',
+      body.serviceIds || [],
+      body.latitude || 28.5804579,
+      body.longitude || 77.4392951,
+    );
+  }
+
+  // ============================================
+  // Analytics - Implemented Features
+  // ============================================
+
+  /**
+   * Get revenue trend
+   * GET /admin/analytics/revenue-trend
+   */
+  @Get('analytics/revenue-trend')
+  async getRevenueTrend(@Query('days') days?: string) {
+    const daysNum = days ? parseInt(days, 10) : 30;
+    return this.adminService.getRevenueTrend(daysNum);
+  }
+
+  /**
+   * Get booking trend
+   * GET /admin/analytics/booking-trend
+   */
+  @Get('analytics/booking-trend')
+  async getBookingTrend(@Query('days') days?: string) {
+    const daysNum = days ? parseInt(days, 10) : 30;
+    return this.adminService.getBookingTrend(daysNum);
+  }
+
+  /**
+   * Get service popularity
+   * GET /admin/analytics/service-popularity
+   */
+  @Get('analytics/service-popularity')
+  async getServicePopularity() {
+    return this.adminService.getServicePopularity();
+  }
+
+  /**
+   * Get worker performance
+   * GET /admin/analytics/worker-performance
+   */
+  @Get('analytics/worker-performance')
+  async getWorkerPerformance() {
+    return this.adminService.getWorkerPerformance();
+  }
+
+  /**
+   * Get customer retention
+   * GET /admin/analytics/customer-retention
+   */
+  @Get('analytics/customer-retention')
+  async getCustomerRetention() {
+    return this.adminService.getCustomerRetention();
+  }
+
+  // ============================================
+  // Monitoring - Implemented Features
+  // ============================================
+
+  /**
+   * Get worker locations for real-time monitoring
+   * GET /admin/monitoring/workers/locations
+   */
+  @Get('monitoring/workers/locations')
+  async getWorkerLocations() {
+    return this.adminService.getWorkerLocations();
+  }
+
+  /**
+   * Get active bookings for real-time monitoring
+   * GET /admin/monitoring/bookings/active
+   */
+  @Get('monitoring/bookings/active')
+  async getActiveBookings() {
+    return this.adminService.getActiveBookings();
+  }
+
+  // ============================================
+  // Assignment Metrics
+  // ============================================
+
+  /**
+   * Get assignment metrics
+   * GET /admin/metrics/assignments
+   */
+  @Get('metrics/assignments')
+  async getAssignmentMetrics() {
+    return this.adminService.getAssignmentMetrics();
+  }
+}

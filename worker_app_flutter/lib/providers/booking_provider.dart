@@ -1,0 +1,473 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import '../models/booking.dart';
+import '../services/api_service.dart';
+import '../services/notification_service.dart';
+
+class BookingProvider extends ChangeNotifier with WidgetsBindingObserver {
+  final ApiService _apiService = ApiService();
+
+  List<Booking> _bookings = [];
+  Booking? _selectedBooking;
+  bool _isLoading = false;
+  String? _error;
+  Timer? _pollingTimer;
+  int _lastBookingsCount = 0;
+  bool _isAppInBackground = false;
+  bool _isWorkerAvailable = true;
+
+  /// Polling interval - configured for fast in-app fallback alerts
+  static const Duration pollingInterval =
+      Duration(seconds: 8);
+
+  List<Booking> get bookings => _bookings;
+  Booking? get selectedBooking => _selectedBooking;
+  bool get isLoading => _isLoading;
+  String? get error => _error;
+
+  List<Booking> get pendingBookings {
+    return _bookings.where((b) => b.isValid && b.isPending).toList();
+  }
+
+  List<Booking> get newBookings {
+    return _bookings.where((b) => b.isValid && b.isNewBooking).toList();
+  }
+
+  List<Booking> get inProgressBookings {
+    return _bookings
+        .where((b) => b.isValid && (b.isInProgress || b.isConfirmed))
+        .toList();
+  }
+
+  List<Booking> get completedBookings {
+    return _bookings.where((b) => b.isValid && b.isCompleted).toList();
+  }
+
+  List<Booking> get acceptedOngoingBookings {
+    // First filter status AND validate booking is actually valid
+    final filtered = _bookings
+        .where((b) => b.isValid && (b.isConfirmed || b.isInProgress))
+        .toList();
+
+    // Remove duplicates by booking ID
+    final seenIds = <String>{};
+    final distinctList = <Booking>[];
+
+    for (final booking in filtered) {
+      if (!seenIds.contains(booking.id)) {
+        seenIds.add(booking.id);
+        distinctList.add(booking);
+      }
+    }
+
+    // Sort newest first (most recent bookings at top)
+    distinctList.sort((a, b) {
+      if (a.createdAt == null && b.createdAt == null) return 0;
+      if (a.createdAt == null) return 1;
+      if (b.createdAt == null) return -1;
+      return b.createdAt!.compareTo(a.createdAt!);
+    });
+
+    return distinctList;
+  }
+
+  List<Booking> get todayOngoingBookings {
+    final todayStr = DateTime.now().toString().split(' ')[0];
+    return acceptedOngoingBookings.where((b) {
+      return b.scheduledDate == todayStr;
+    }).toList();
+  }
+
+  /// Fetch only accepted ongoing bookings (CONFIRMED + IN_PROGRESS)
+  Future<void> fetchAcceptedBookings() async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final response = await _apiService.get('workers/me/accepted-bookings');
+
+      if (response == null) {
+        _bookings = [];
+      } else if (response is List) {
+        _bookings = [];
+        for (int i = 0; i < response.length; i++) {
+          try {
+            final bookingJson = response[i] as Map<String, dynamic>;
+            try {
+              final booking = Booking.fromJson(bookingJson);
+              // Only add valid bookings
+              if (booking.isValid) {
+                _bookings.add(booking);
+              } else {
+                debugPrint(
+                    'Skipping invalid booking at index $i: id=${booking.id}');
+              }
+            } catch (e) {
+              debugPrint('Skipping invalid booking at index $i: $e');
+            }
+          } catch (e) {
+            debugPrint('Error parsing booking at index $i: $e');
+          }
+        }
+      } else if (response is Map<String, dynamic> &&
+          response['bookings'] != null) {
+        _bookings = (response['bookings'] as List)
+            .map((b) => Booking.fromJson(b as Map<String, dynamic>))
+            .toList();
+      } else {
+        _bookings = [];
+      }
+    } catch (e) {
+      _error = e.toString();
+      debugPrint('Error fetching accepted bookings: $e');
+    }
+
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  /// Start auto-polling for new bookings
+  void startPolling() {
+    stopPolling(); // Cancel any existing timer
+    _isAppInBackground = false;
+    debugPrint(
+        'BookingProvider: Starting polling every ${pollingInterval.inSeconds} seconds');
+    _pollingTimer = Timer.periodic(pollingInterval, (_) {
+      if (_isAppInBackground || !_isWorkerAvailable) {
+        debugPrint(
+            'BookingProvider: Skipping poll - app in background or worker offline');
+        return;
+      }
+      debugPrint('BookingProvider: Polling triggered (fallback only)');
+      _fetchBookingsSilent();
+    });
+  }
+
+  /// Stop auto-polling
+  void stopPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = null;
+    debugPrint('BookingProvider: Polling stopped');
+  }
+
+  /// Handle app lifecycle changes to pause/resume polling
+  void handleAppLifecycleChanged(AppLifecycleState state) {
+    debugPrint('BookingProvider: Lifecycle changed to $state');
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _isAppInBackground = true;
+      debugPrint('BookingProvider: App in background - polling will be paused');
+    } else if (state == AppLifecycleState.resumed) {
+      _isAppInBackground = false;
+      debugPrint('BookingProvider: App resumed - polling will continue');
+      // Immediately fetch to catch up on any missed updates
+      _fetchBookingsSilent();
+    }
+  }
+
+  /// Fetch bookings silently without showing loading indicator
+  Future<void> _fetchBookingsSilent() async {
+    try {
+      final response = await _apiService.get('workers/me/bookings');
+
+      if (response == null) {
+        return;
+      }
+
+      List<Booking> newBookings = [];
+      if (response is List) {
+        for (int i = 0; i < response.length; i++) {
+          try {
+            final bookingJson = response[i] as Map<String, dynamic>;
+            try {
+              final booking = Booking.fromJson(bookingJson);
+              // Only add valid bookings
+              if (booking.isValid) {
+                newBookings.add(booking);
+              } else {
+                debugPrint(
+                    'Silent fetch: Skipping invalid booking at index $i: id=${booking.id}');
+              }
+            } catch (e) {
+              debugPrint(
+                  'Silent fetch: Skipping invalid booking at index $i: $e');
+            }
+          } catch (e) {
+            debugPrint('Error parsing booking at index $i: $e');
+          }
+        }
+      } else if (response is Map<String, dynamic> &&
+          response['bookings'] != null) {
+        newBookings = (response['bookings'] as List)
+            .map((b) => Booking.fromJson(b as Map<String, dynamic>))
+            .toList();
+      }
+
+      // Check for new pending/requested bookings that are assigned to the worker
+      // This is more reliable than comparing counts because it alerts whenever there is a PENDING status job
+      final oldPendingIds = _bookings.where((b) => b.isPending).map((b) => b.id).toSet();
+      for (var booking in newBookings) {
+        if (booking.isPending && !oldPendingIds.contains(booking.id)) {
+          debugPrint('BookingProvider: NEW PENDING BOOKING DETECTED! ID: ${booking.id}');
+          // Push booking data payload to the NotificationService stream to display dialog and play sound
+          NotificationService.triggerNewBookingEvent({
+            'bookingId': booking.id,
+            'serviceName': booking.serviceName,
+            'serviceDate': booking.scheduledDate,
+            'startTime': booking.startTime,
+            'customerName': booking.customerName,
+            'customerAddress': booking.customerAddress,
+            'price': booking.price.toStringAsFixed(0),
+            'fullScreen': 'true', // Triggers full-screen alert dialog and ringing
+          });
+        }
+      }
+      _lastBookingsCount = newBookings.length;
+
+      // Sort bookings by creation date descending (newest first)
+      newBookings.sort((a, b) {
+        if (a.createdAt == null && b.createdAt == null) return 0;
+        if (a.createdAt == null) return 1;
+        if (b.createdAt == null) return -1;
+        return b.createdAt!.compareTo(a.createdAt!);
+      });
+
+      _bookings = newBookings;
+      _scheduleRemindersForToday();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('BookingProvider: Silent fetch error: $e');
+    }
+  }
+
+  Future<void> fetchBookings() async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final response = await _apiService.get('workers/me/bookings');
+      debugPrint('Bookings response: $response');
+
+      // Handle different response formats
+      if (response == null) {
+        debugPrint('No bookings response (null)');
+        _bookings = [];
+      } else if (response is List) {
+        debugPrint('Response is a List with ${response.length} items');
+        _bookings = [];
+        for (int i = 0; i < response.length; i++) {
+          try {
+            final bookingJson = response[i] as Map<String, dynamic>;
+            try {
+              final booking = Booking.fromJson(bookingJson);
+              // Only add valid bookings
+              if (booking.isValid) {
+                _bookings.add(booking);
+                debugPrint(
+                    'Parsed booking $i: ${booking.id} - ${booking.serviceName} - ${booking.status}');
+              } else {
+                debugPrint(
+                    'Skipping invalid booking at index $i: id=${booking.id}');
+              }
+            } catch (e, stackTrace) {
+              debugPrint('Error parsing booking at index $i: $e');
+              debugPrint('Booking keys: ${(response[i] as Map).keys.toList()}');
+            }
+          } catch (e, stackTrace) {
+            debugPrint('Error parsing booking at index $i: $e');
+            debugPrint('Booking keys: ${(response[i] as Map).keys.toList()}');
+          }
+        }
+        debugPrint('Total parsed bookings: ${_bookings.length}');
+
+        // Sort bookings by creation date descending (newest first)
+        _bookings.sort((a, b) {
+          if (a.createdAt == null && b.createdAt == null) return 0;
+          if (a.createdAt == null) return 1;
+          if (b.createdAt == null) return -1;
+          return b.createdAt!.compareTo(a.createdAt!);
+        });
+      } else if (response is Map<String, dynamic>) {
+        // Response is a map - check for 'bookings' key
+        if (response['bookings'] != null) {
+          debugPrint('Response has bookings key');
+          _bookings = (response['bookings'] as List)
+              .map((b) => Booking.fromJson(b as Map<String, dynamic>))
+              .toList();
+        } else {
+          debugPrint('Response is a Map but no bookings key: ${response.keys}');
+          // Empty response or other format
+          _bookings = [];
+        }
+      } else {
+        debugPrint('Unexpected response type: ${response.runtimeType}');
+        _bookings = [];
+      }
+      
+      // Update the last count to prevent triggering alerts on initial load
+      _lastBookingsCount = _bookings.length;
+    } catch (e) {
+      _error = e.toString();
+      debugPrint('Error fetching bookings: $e');
+    }
+
+    _scheduleRemindersForToday();
+
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  void _scheduleRemindersForToday() {
+    try {
+      final todayJobs = todayOngoingBookings;
+      for (var booking in todayJobs) {
+        NotificationService().scheduleBookingReminder(booking);
+      }
+    } catch (e) {
+      debugPrint('Error scheduling reminders: $e');
+    }
+  }
+
+  Future<bool> acceptBooking(String bookingId) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      await _apiService.post('workers/bookings/$bookingId/accept', {});
+      // Optimistic update instead of full refresh
+      final index = _bookings.indexWhere((b) => b.id == bookingId);
+      if (index != -1) {
+        _bookings[index] = _bookings[index].copyWith(status: 'CONFIRMED');
+      }
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> rejectBooking(String bookingId, {String? reason}) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      await _apiService.post('workers/bookings/$bookingId/reject', {
+        if (reason != null) 'reason': reason,
+      });
+      await fetchBookings();
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> startBooking(String bookingId, {String? otp}) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final payload = <String, dynamic>{};
+      if (otp != null && otp.isNotEmpty) {
+        payload['otp'] = otp;
+      }
+      
+      await _apiService.post('workers/bookings/$bookingId/start', payload);
+      await fetchBookings();
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> completeBooking(String bookingId, {String? otp}) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final body = otp != null ? {'otp': otp} : <String, dynamic>{};
+      await _apiService.post('workers/bookings/$bookingId/complete', body);
+      await fetchBookings();
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  void selectBooking(Booking booking) {
+    _selectedBooking = booking;
+    notifyListeners();
+  }
+
+  void clearSelection() {
+    _selectedBooking = null;
+    notifyListeners();
+  }
+
+  /// Fetch a specific booking by ID
+  Future<Booking?> fetchBookingById(String bookingId) async {
+    try {
+      // First check local cache
+      Booking? cached;
+      try {
+        cached = _bookings.firstWhere((b) => b.id == bookingId);
+      } catch (e) {
+        cached = null;
+      }
+      if (cached != null) return cached;
+
+      // Fetch single booking directly from endpoint
+      final response = await _apiService.get('workers/bookings/$bookingId');
+      if (response == null) return null;
+
+      final booking = Booking.fromJson(response as Map<String, dynamic>);
+
+      // Update local cache
+      final index = _bookings.indexWhere((b) => b.id == bookingId);
+      if (index != -1) {
+        _bookings[index] = booking;
+      } else {
+        _bookings.add(booking);
+      }
+
+      notifyListeners();
+      return booking;
+    } catch (e) {
+      debugPrint('Booking not found with ID: $bookingId');
+      return null;
+    }
+  }
+
+  @override
+  void dispose() {
+    stopPolling();
+    super.dispose();
+  }
+}

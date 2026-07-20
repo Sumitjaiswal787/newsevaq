@@ -1,0 +1,465 @@
+import 'package:flutter/foundation.dart';
+import 'user.dart';
+import 'worker.dart';
+import 'service.dart';
+
+enum BookingStatus {
+  assignmentInProgress,
+  scheduled,
+  confirmed,
+  inProgress,
+  completed,
+  cancelled,
+}
+
+enum BookingType { onDemand, scheduled, subscription }
+
+/// Assignment state for tracking worker assignment progress
+enum BookingAssignmentState {
+  pending, // Worker assignment in progress
+  assigned, // Worker has been assigned
+  confirmed, // Worker confirmed the booking
+  enRoute, // Worker is on the way
+  arrived, // Worker has arrived
+  inProgress, // Service is in progress
+  completed, // Service completed
+  cancelled, // Booking cancelled
+}
+
+/// Maps backend assignmentState string to BookingAssignmentState enum
+BookingAssignmentState _mapAssignmentState(String? state) {
+  if (state == null) return BookingAssignmentState.pending;
+
+  final normalized = state.toLowerCase().trim();
+
+  switch (normalized) {
+    case 'pending':
+    case 'assignment_pending':
+      return BookingAssignmentState.pending;
+    case 'assigned':
+      return BookingAssignmentState.assigned;
+    case 'confirmed':
+      return BookingAssignmentState.confirmed;
+    case 'en_route':
+    case 'enroute':
+      return BookingAssignmentState.enRoute;
+    case 'arrived':
+      return BookingAssignmentState.arrived;
+    case 'in_progress':
+    case 'inprogress':
+      return BookingAssignmentState.inProgress;
+    case 'completed':
+      return BookingAssignmentState.completed;
+    case 'cancelled':
+      return BookingAssignmentState.cancelled;
+    default:
+      return BookingAssignmentState.pending;
+  }
+}
+
+class Booking {
+  // All ids are normalized to String type for consistent handling across all endpoints
+  final String id; // Internal ID
+  final String publicId; // Public API ID
+  final String? serviceRequestId;
+  final String? subscriptionId; // Links to subscription for custom plans
+  final User user;
+  final Worker worker;
+  final Service service;
+  final DateTime startTime;
+  final DateTime endTime;
+  final BookingStatus status;
+  final bool isPaid;
+  final double? amount;
+  final BookingType? bookingType;
+  final BookingAssignmentState? assignmentState; // Worker assignment state
+  final Map<String, dynamic>? subscription; // Subscription data for custom plans
+  final String? otp;
+  final bool isOtpVerified;
+  final bool isOtpRequired;
+  final String? completionOtp;
+  final bool isCompletionOtpVerified;
+  final DateTime? startedAt;
+
+  Booking({
+    required this.id,
+    required this.publicId,
+    this.serviceRequestId,
+    this.subscriptionId,
+    required this.user,
+    required this.worker,
+    required this.service,
+    required this.startTime,
+    required this.endTime,
+    required this.status,
+    required this.isPaid,
+    this.amount,
+    this.bookingType,
+    this.assignmentState,
+    this.subscription,
+    this.otp,
+    this.isOtpVerified = false,
+    this.isOtpRequired = false,
+    this.completionOtp,
+    this.isCompletionOtpVerified = false,
+    this.startedAt,
+  });
+
+  // Get display service name (handles custom plans with no linked service)
+  String get serviceName {
+    if (service.name.isNotEmpty) {
+      return service.name;
+    }
+    // Fallback to subscription custom plan data for custom subscriptions
+    if (subscription != null && subscription!['customPlanData'] != null) {
+      return subscription!['customPlanData']['serviceType'] ??
+          'Unknown Service';
+    }
+    return 'Unknown Service';
+  }
+
+  // Helper methods to check booking type
+  bool get isSubscription => bookingType == BookingType.subscription;
+  bool get isOneTime => bookingType == BookingType.onDemand;
+  bool get isScheduled => bookingType == BookingType.scheduled;
+
+  // Get human-readable booking type label
+  String get bookingTypeLabel {
+    switch (bookingType) {
+      case BookingType.subscription:
+        return 'Monthly Subscription';
+      case BookingType.onDemand:
+        return 'One-Time Service';
+      case BookingType.scheduled:
+        return 'Scheduled Service';
+      default:
+        return 'Service';
+    }
+  }
+
+  static BookingStatus _mapStatus(String statusStr) {
+    final normalized = statusStr.toLowerCase().trim();
+
+    // Map old statuses to new ones
+    if (normalized == 'pending' || normalized == 'requested') {
+      return BookingStatus.assignmentInProgress;
+    }
+    
+    if (normalized == 'in_progress' || normalized == 'inprogress') {
+      return BookingStatus.inProgress;
+    }
+
+    try {
+      return BookingStatus.values.firstWhere(
+        (e) => e.toString().split('.').last == normalized,
+        orElse: () => BookingStatus.assignmentInProgress,
+      );
+    } catch (e) {
+      return BookingStatus.assignmentInProgress;
+    }
+  }
+
+  static BookingType? _mapType(String? typeStr) {
+    if (typeStr == null) return null;
+    // Normalize: lowercase and replace underscores with nothing
+    final normalized = typeStr.toLowerCase().replaceAll('_', '').trim();
+
+    // Handle special cases
+    if (normalized == 'on_demand' || normalized == 'ondemand') {
+      return BookingType.onDemand;
+    }
+    if (normalized == 'scheduled') {
+      return BookingType.scheduled;
+    }
+    if (normalized == 'subscription' || normalized == 'monthly') {
+      return BookingType.subscription;
+    }
+
+    try {
+      return BookingType.values.firstWhere(
+        (e) => e.toString().split('.').last == normalized,
+        orElse: () => BookingType.onDemand,
+      );
+    } catch (e) {
+      return BookingType.onDemand;
+    }
+  }
+
+  // Improved dateTime parser that handles multiple input formats
+  static DateTime _parseDateTime(
+    dynamic timeValue,
+    dynamic dateStr, {
+    Duration defaultOffset = Duration.zero,
+  }) {
+    debugPrint(
+      '🔍 DEBUG _parseDateTime: timeValue=$timeValue, dateStr=$dateStr',
+    );
+
+    // Case 1: Already a DateTime object
+    if (timeValue is DateTime) {
+      debugPrint(
+        '🔍 DEBUG _parseDateTime: input is DateTime, returning ${timeValue.toLocal()}',
+      );
+      return timeValue.toLocal();
+    }
+
+    // Case 2: String format - could be ISO8601 or time only
+    if (timeValue is String) {
+      try {
+        // Try parsing as ISO8601 (full timestamp)
+        if (timeValue.contains('T') || timeValue.contains('-')) {
+          final parsed = DateTime.parse(timeValue);
+          debugPrint(
+            '🔍 DEBUG _parseDateTime: parsed ISO8601 to ${parsed.toLocal()}',
+          );
+          return parsed.toLocal();
+        }
+
+        // It's just a time string (HH:MM:SS), need to combine with date
+        List<String> timeParts = timeValue.split(':');
+        if (timeParts.length >= 2) {
+          int hours = int.tryParse(timeParts[0]) ?? 0;
+          int minutes = int.tryParse(timeParts[1]) ?? 0;
+          int seconds = timeParts.length > 2
+              ? (int.tryParse(timeParts[2]) ?? 0)
+              : 0;
+
+          // Get base date from dateStr or use now
+          DateTime baseDate = DateTime.now();
+          if (dateStr != null) {
+            try {
+              if (dateStr is String) {
+                baseDate = DateTime.parse(dateStr);
+              } else if (dateStr is DateTime) {
+                baseDate = dateStr;
+              }
+            } catch (e) {
+              debugPrint(
+                '🔍 DEBUG _parseDateTime: failed to parse dateStr: $e',
+              );
+            }
+          }
+
+          final result = DateTime(
+            baseDate.year,
+            baseDate.month,
+            baseDate.day,
+            hours,
+            minutes,
+            seconds,
+          );
+          debugPrint('🔍 DEBUG _parseDateTime: combined date+time to $result');
+          return result;
+        }
+      } catch (e) {
+        debugPrint('🔍 DEBUG _parseDateTime: failed to parse timeValue: $e');
+      }
+    }
+
+    // Case 3: Fallback - use current date/time + default offset
+    final result = DateTime.now().add(defaultOffset);
+    debugPrint('🔍 DEBUG _parseDateTime: using fallback $result');
+    return result;
+  }
+
+  static DateTime _parseTime(String timeStr, dynamic dateStr) {
+    debugPrint('🔍 DEBUG _parseTime: timeStr=$timeStr, dateStr=$dateStr');
+    try {
+      // First, try to parse as full ISO8601 timestamp
+      if (timeStr.contains('T') || timeStr.contains('-')) {
+        return DateTime.parse(timeStr);
+      }
+
+      // If just time string (HH:MM:SS), combine with date if available
+      List<String> timeParts = timeStr.split(':');
+      if (timeParts.length >= 2) {
+        int hours = int.tryParse(timeParts[0]) ?? 0;
+        int minutes = int.tryParse(timeParts[1]) ?? 0;
+        int seconds = timeParts.length > 2
+            ? (int.tryParse(timeParts[2]) ?? 0)
+            : 0;
+
+        DateTime baseDate = DateTime.now();
+        // Handle different dateStr formats: null, String, or DateTime
+        if (dateStr != null) {
+          try {
+            if (dateStr is String && dateStr.contains('-')) {
+              // String format like "2026-03-31" - parse as UTC midnight then add timezone offset
+              // Use DateTime.parse which treats it as UTC, then convert to local
+              final parsed = DateTime.parse(dateStr);
+              // Adjust for timezone - the date string is in YYYY-MM-DD format (local date)
+              // We need to preserve the local date, not UTC date
+              baseDate = DateTime(parsed.year, parsed.month, parsed.day);
+              debugPrint(
+                '🔍 DEBUG _parseTime: parsed string date to $baseDate',
+              );
+            } else if (dateStr is DateTime) {
+              baseDate = DateTime(dateStr.year, dateStr.month, dateStr.day);
+              debugPrint('🔍 DEBUG _parseTime: using DateTime date $baseDate');
+            } else if (dateStr is String) {
+              // Try parsing any other string format
+              baseDate = DateTime.parse(dateStr);
+            }
+          } catch (e) {
+            debugPrint(
+              '🔍 DEBUG _parseTime: Failed to parse date: $dateStr, error: $e',
+            );
+          }
+        }
+
+        final result = DateTime(
+          baseDate.year,
+          baseDate.month,
+          baseDate.day,
+          hours,
+          minutes,
+          seconds,
+        );
+        debugPrint('🔍 DEBUG _parseTime: returning $result');
+        return result;
+      }
+    } catch (e) {
+      debugPrint('🔍 DEBUG _parseTime: Failed to parse time: $timeStr - $e');
+    }
+
+    return DateTime.now();
+  }
+
+  factory Booking.fromJson(Map<String, dynamic>? json) {
+    if (json == null) {
+      return Booking(
+        id: '',
+        publicId: '',
+        serviceRequestId: null,
+        subscriptionId: null,
+        user: User(
+          id: 0,
+          publicId: '',
+          email: '',
+          firstName: '',
+          lastName: '',
+          role: 'user',
+        ),
+        worker: Worker(
+          id: 0,
+          publicId: '',
+          user: User(
+            id: 0,
+            publicId: '',
+            email: '',
+            firstName: '',
+            lastName: '',
+            role: 'worker',
+          ),
+          services: [],
+          rating: 0,
+          reviewCount: 0,
+          bio: '',
+        ),
+        service: Service(
+          id: 0,
+          publicId: '',
+          name: '',
+          description: '',
+          basePrice: 0,
+          category: '',
+        ),
+        startTime: DateTime.now(),
+        endTime: DateTime.now().add(const Duration(hours: 1)),
+        status: BookingStatus.assignmentInProgress,
+        isPaid: false,
+        amount: null,
+        bookingType: null,
+        assignmentState: null,
+        otp: null,
+        isOtpVerified: false,
+      );
+    }
+
+    // Debug log to check if subscription is present in JSON
+    debugPrint(
+      'Booking.fromJson: booking publicId=${json['publicId']}, subscription=${json['subscription']}',
+    );
+
+    return Booking(
+      id: _parseId(json['id']),
+      publicId: json['publicId'] ?? '',
+      serviceRequestId: json['serviceRequestId'],
+      subscriptionId: _parseId(json['subscriptionId']),
+      user: json['user'] != null
+          ? User.fromJson(json['user'])
+          : User(
+              id: 0,
+              publicId: '',
+              email: '',
+              firstName: '',
+              lastName: '',
+              role: 'user',
+            ),
+      worker: json['worker'] != null
+          ? Worker.fromJson(json['worker'])
+          : Worker(
+              id: 0,
+              publicId: '',
+              user: User(
+                id: 0,
+                publicId: '',
+                email: '',
+                firstName: '',
+                lastName: '',
+                role: 'worker',
+              ),
+              services: [],
+              rating: 0,
+              reviewCount: 0,
+              bio: '',
+            ),
+      service: json['service'] != null
+          ? Service.fromJson(json['service'])
+          : Service(
+              id: 0,
+              publicId: '',
+              name: '',
+              description: '',
+              basePrice: 0,
+              category: '',
+            ),
+      // Handle startTime - try to parse from different formats
+      startTime: _parseDateTime(json['startTime'], json['date']),
+      // Handle endTime - try to parse from different formats
+      endTime: _parseDateTime(
+        json['endTime'],
+        json['date'],
+        defaultOffset: const Duration(hours: 1),
+      ),
+      status: _mapStatus(json['status'] ?? 'assignmentInProgress'),
+
+      isPaid: json['isPaid'] ?? false,
+      startedAt: json['startedAt'] != null ? DateTime.tryParse(json['startedAt'].toString()) : null,
+      amount: (json['amount'] != null)
+          ? (json['amount'] is String
+                ? double.tryParse(json['amount'])
+                : json['amount']?.toDouble())
+          : (json['totalAmount'] != null
+                ? (json['totalAmount'] is String
+                      ? double.tryParse(json['totalAmount'])
+                      : json['totalAmount']?.toDouble())
+                : 0.0),
+      bookingType: _mapType(json['type']),
+      assignmentState: _mapAssignmentState(json['assignmentState']),
+      subscription: json['subscription'],
+      otp: json['otp']?.toString(),
+      isOtpVerified: json['isOtpVerified'] ?? false,
+      isOtpRequired: json['isOtpRequired'] ?? false,
+      completionOtp: json['completionOtp']?.toString(),
+      isCompletionOtpVerified: json['isCompletionOtpVerified'] ?? false,
+    );
+  }
+
+  /// Helper to parse id from various types (int or String UUID)
+  /// ALWAYS returns String type for consistent id handling across all endpoints
+  static String _parseId(dynamic value) {
+    if (value == null) return '';
+    return value.toString();
+  }
+}

@@ -1,0 +1,1198 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'package:http/http.dart' as http;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../config/app_config.dart';
+import '../providers/auth_provider.dart';
+
+/// Exception thrown when JWT token has expired
+class TokenExpiredException implements Exception {
+  final String message;
+  TokenExpiredException(this.message);
+  @override
+  String toString() => 'TokenExpiredException: $message';
+}
+
+// Helper function to decode JWT token
+Map<String, dynamic>? decodeJwt(String token) {
+  try {
+    final parts = token.split('.');
+    if (parts.length != 3) return null;
+    var payload = parts[1];
+
+    // Fix padding for base64 URL decoding
+    while (payload.length % 4 != 0) {
+      payload += '=';
+    }
+
+    final decoded = base64Url.decode(payload);
+    final json = utf8.decode(decoded);
+    return jsonDecode(json);
+  } catch (e) {
+    debugPrint('Error decoding token: $e');
+    return null;
+  }
+}
+
+// Time drift compensation: add 5 minutes leeway to account for device/server time differences
+// This prevents premature token expiry detection due to clock skew
+// PRODUCTION FIX: Increased from 30 to 300 seconds for mobile reliability
+const int TOKEN_TIME_LEEWAY_SECONDS = 300;
+
+// Helper function to check if token is expired
+bool isTokenExpired(Map<String, dynamic> tokenData) {
+  if (!tokenData.containsKey('exp')) return true;
+  final exp = tokenData['exp'] as int;
+  final currentTime = DateTime.now().millisecondsSinceEpoch / 1000;
+  // Add leeway to prevent false positives due to device time drift
+  return currentTime > (exp - TOKEN_TIME_LEEWAY_SECONDS);
+}
+
+// Check if token needs proactive refresh (expires in next 5 minutes)
+// This allows refreshing before the token actually expires
+bool isTokenExpiringSoon(Map<String, dynamic> tokenData) {
+  if (!tokenData.containsKey('exp')) return true;
+  final exp = tokenData['exp'] as int;
+  final currentTime = DateTime.now().millisecondsSinceEpoch / 1000;
+  // Refresh if token expires in less than 5 minutes (300 seconds)
+  const int proactiveRefreshThreshold = 300;
+  return (exp - currentTime) < proactiveRefreshThreshold;
+}
+
+class ApiService {
+  static String get baseUrl {
+    return AppConfig.apiBaseUrl;
+  }
+
+  /// Normalize endpoint path to prevent double /api prefix collision
+  /// Automatically strips leading /api prefix if present to prevent /api/api paths
+  static String normalizeEndpoint(String endpoint) {
+    if (endpoint.startsWith('/api/')) {
+      debugPrint(
+        '⚠️ ApiService: Fixing double /api prefix for endpoint: $endpoint',
+      );
+      endpoint = endpoint.substring(5);
+    } else if (endpoint.startsWith('api/')) {
+      endpoint = endpoint.substring(4);
+    }
+    // Remove leading slash if present to avoid double slashes
+    if (endpoint.startsWith('/')) {
+      endpoint = endpoint.substring(1);
+    }
+    return endpoint;
+  }
+
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
+
+  /// PRODUCTION FIX: Centralized token clearing that syncs with AuthProvider.
+  /// Call this INSTEAD of scattered clearToken() / storage deletes.
+  static Future<void> _clearAllAuthState() async {
+    debugPrint('ApiService: _clearAllAuthState — syncing with AuthProvider');
+    const storage = FlutterSecureStorage();
+    await storage.delete(key: 'jwt_token');
+    await storage.delete(key: 'user_id');
+    await storage.delete(key: 'cached_user');
+    await storage.delete(key: 'refresh_token');
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('jwt_token');
+    await prefs.remove('user_id');
+    await prefs.remove('cached_user');
+    await prefs.remove('refresh_token');
+
+    // Sync: tell AuthProvider its in-memory caches are invalid
+    try {
+      final ap = AuthProvider.instance;
+      ap.clearAuthState(); // Silent — no navigation, AuthWrapper will react naturally
+    } catch (e) {
+      debugPrint('ApiService: AuthProvider.clearAuthState failed: $e');
+    }
+  }
+
+  /// PRODUCTION FIX: Read token from SharedPreferences FIRST
+  /// FlutterSecureStorage is unreliable on some devices (keystore corruption).
+  /// SharedPreferences survives backups, updates, and backgrounding much better.
+  Future<String?> _readToken() async {
+    // 1. SharedPreferences (primary — reliable on all devices)
+    final prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('jwt_token');
+    if (token != null && token.isNotEmpty) {
+      return token;
+    }
+
+    // 2. FlutterSecureStorage fallback (legacy storage)
+    token = await _storage.read(key: 'jwt_token');
+    if (token != null && token.isNotEmpty) {
+      // Heal: replicate back to SharedPreferences so next read is fast+reliable
+      await prefs.setString('jwt_token', token);
+      debugPrint('ApiService: Healed jwt_token from SecureStorage -> SharedPreferences');
+      return token;
+    }
+
+    return null;
+  }
+
+  Future<Map<String, String>> _getHeaders() async {
+    String? token = await _readToken();
+    debugPrint(
+      'ApiService: _getHeaders - token found: ${token != null}',
+    );
+
+    if (token != null) {
+      debugPrint('ApiService: _getHeaders - token length: ${token.length}');
+      if (kDebugMode && token.length > 20) {
+        debugPrint(
+          'ApiService: _getHeaders - token starts with: ${token.substring(0, 20)}...',
+        );
+      }
+
+      // Check token expiry (PRODUCTION-READY: Try to refresh expired tokens)
+      final tokenData = decodeJwt(token);
+      if (tokenData != null) {
+        // Proactive refresh: refresh if token is expiring soon
+        if (isTokenExpiringSoon(tokenData)) {
+          debugPrint(
+            'ApiService: _getHeaders - Token expiring soon, attempting proactive refresh',
+          );
+          final refreshed = await _refreshAccessTokenWithRetry();
+          if (refreshed) {
+            token = await _readToken();
+            debugPrint(
+              'ApiService: _getHeaders - Token proactively refreshed successfully',
+            );
+          } else {
+            debugPrint(
+              'ApiService: _getHeaders - Proactive refresh failed, continuing with current token',
+            );
+          }
+        } else if (isTokenExpired(tokenData)) {
+          debugPrint(
+            'ApiService: _getHeaders - Token has expired, attempting refresh',
+          );
+          final refreshed = await _refreshAccessTokenWithRetry();
+          if (refreshed) {
+            token = await _readToken();
+            debugPrint(
+              'ApiService: _getHeaders - Token refreshed successfully',
+            );
+          } else {
+            // Refresh failed after retries, clear token AND sync AuthProvider
+            debugPrint(
+              'ApiService: _getHeaders - Token refresh failed after retries, clearing session',
+            );
+            await _clearAllAuthState();
+            token = null;
+            throw TokenExpiredException(
+              'Session expired. Please log in again.',
+            );
+          }
+        }
+      } else {
+        debugPrint('ApiService: _getHeaders - Invalid token, clearing session');
+        await _clearAllAuthState();
+        token = null;
+      }
+    } else {
+      debugPrint('ApiService: _getHeaders - NO TOKEN FOUND in any storage');
+      // No token = not logged in yet. Do NOT call clearAuthState —
+      // AuthWrapper already handles unauthenticated state naturally.
+      // Calling it here would create a throwaway AuthProvider.instance before
+      // main.dart has set the real one.
+    }
+    return {
+      'Content-Type': 'application/json',
+      if (token != null) 'Authorization': 'Bearer $token',
+    };
+  }
+
+  Future<dynamic> post(String endpoint, Map<String, dynamic> data) async {
+    try {
+      final normalizedEndpoint = normalizeEndpoint(endpoint);
+      final url = '$baseUrl/$normalizedEndpoint';
+      debugPrint('ApiService: POST request to $url');
+      final response = await http
+          .post(
+            Uri.parse(url),
+            headers: await _getHeaders(),
+            body: jsonEncode(data),
+          )
+          .timeout(AppConfig.requestTimeout);
+      return await _processResponse(
+        response,
+        method: 'POST',
+        endpoint: endpoint,
+        body: data,
+      );
+    } catch (e) {
+      debugPrint('POST Error to $endpoint: $e');
+      debugPrint('POST Error details: baseUrl=$baseUrl, endpoint=$endpoint');
+      if (e is SocketException) {
+        throw Exception('Network error: Please check your internet connection');
+      } else if (e is TimeoutException) {
+        throw Exception('Request timeout: Please try again');
+      } else if (e is FormatException) {
+        throw Exception('Invalid response format from server');
+      } else {
+        throw Exception('Request failed: $e');
+      }
+    }
+  }
+
+  Future<dynamic> get(String endpoint) async {
+    try {
+      final normalizedEndpoint = normalizeEndpoint(endpoint);
+      final url = '$baseUrl/$normalizedEndpoint';
+      final headers = await _getHeaders();
+      debugPrint('ApiService: GET request to $url');
+      debugPrint('ApiService: GET headers: $headers');
+      final stopwatch = Stopwatch()..start();
+      final response = await http
+          .get(Uri.parse(url), headers: headers)
+          .timeout(AppConfig.requestTimeout);
+      stopwatch.stop();
+      debugPrint(
+        'ApiService: GET response received in ${stopwatch.elapsedMilliseconds}ms for $url',
+      );
+      return await _processResponse(
+        response,
+        method: 'GET',
+        endpoint: endpoint,
+      );
+    } catch (e) {
+      debugPrint('GET Error to $endpoint: $e');
+      if (e is SocketException) {
+        throw Exception('Network error: Please check your internet connection');
+      } else if (e is TimeoutException) {
+        throw Exception('Request timeout: Please try again');
+      } else if (e is FormatException) {
+        throw Exception('Invalid response format from server');
+      } else {
+        throw Exception('Request failed: $e');
+      }
+    }
+  }
+
+  Future<dynamic> patch(String endpoint, Map<String, dynamic> data) async {
+    try {
+      final normalizedEndpoint = normalizeEndpoint(endpoint);
+      final response = await http
+          .patch(
+            Uri.parse('$baseUrl/$normalizedEndpoint'),
+            headers: await _getHeaders(),
+            body: jsonEncode(data),
+          )
+          .timeout(AppConfig.requestTimeout);
+      return await _processResponse(
+        response,
+        method: 'PATCH',
+        endpoint: endpoint,
+        body: data,
+      );
+    } catch (e) {
+      debugPrint('PATCH Error to $endpoint: $e');
+      if (e is SocketException) {
+        throw Exception('Network error: Please check your internet connection');
+      } else if (e is TimeoutException) {
+        throw Exception('Request timeout: Please try again');
+      } else if (e is FormatException) {
+        throw Exception('Invalid response format from server');
+      } else {
+        throw Exception('Request failed: $e');
+      }
+    }
+  }
+
+  Future<dynamic> delete(String endpoint) async {
+    try {
+      final normalizedEndpoint = normalizeEndpoint(endpoint);
+      final response = await http
+          .delete(
+            Uri.parse('$baseUrl/$normalizedEndpoint'),
+            headers: await _getHeaders(),
+          )
+          .timeout(AppConfig.requestTimeout);
+      return await _processResponse(response);
+    } catch (e) {
+      debugPrint('DELETE Error to $endpoint: $e');
+      if (e is SocketException) {
+        throw Exception('Network error: Please check your internet connection');
+      } else if (e is TimeoutException) {
+        throw Exception('Request timeout: Please try again');
+      } else if (e is FormatException) {
+        throw Exception('Invalid response format from server');
+      } else {
+        throw Exception('Request failed: $e');
+      }
+    }
+  }
+
+  Future<dynamic> _processResponse(
+    http.Response response, {
+    String? method,
+    String? endpoint,
+    Map<String, dynamic>? body,
+  }) async {
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      if (response.body.isEmpty) return null;
+      return jsonDecode(response.body);
+    } else if (response.statusCode == 401) {
+      // Handle 401 Unauthorized - token expired or invalid
+      debugPrint(
+        'ApiService: 401 Unauthorized received - attempting to refresh token',
+      );
+
+      // Attempt to refresh the access token
+      final refreshed = await _refreshAccessToken();
+      if (refreshed && method != null && endpoint != null) {
+        debugPrint('ApiService: Token refreshed, retrying request...');
+        // Retry the original request with new token
+        try {
+          final retriedResponse = await _retryRequest(
+            method,
+            endpoint,
+            body: body,
+          );
+          return await _processResponse(
+            retriedResponse,
+            method: method,
+            endpoint: endpoint,
+            body: body,
+          );
+        } catch (e) {
+          debugPrint('ApiService: Retry after refresh failed: $e');
+          // Fall through to clear token and throw
+        }
+      }
+
+      // If refresh failed or no method/endpoint provided, clear token and throw
+      debugPrint('ApiService: Token refresh failed, clearing session');
+      await _clearAllAuthState();
+      // Throw exception to trigger redirect to login
+      throw TokenExpiredException('Session expired. Please log in again.');
+    } else if (response.statusCode == 400) {
+      // Handle 400 status as business state, not error
+      // Return the response data for business logic to handle
+      try {
+        final data = jsonDecode(response.body);
+        return {
+          'status': 'business_error',
+          'statusCode': 400,
+          'data': data,
+          'message': data['message'] ?? 'Business validation failed',
+        };
+      } catch (e) {
+        // If JSON parsing fails, return basic error structure
+        return {
+          'status': 'business_error',
+          'statusCode': 400,
+          'data': null,
+          'message': 'Business validation failed',
+        };
+      }
+    } else {
+      throw Exception('Error ${response.statusCode}: ${response.body}');
+    }
+  }
+
+  // Method to refresh access token using refresh token
+  Future<bool> _refreshAccessToken() async {
+    try {
+      final refreshToken = await _storage.read(key: 'refresh_token');
+      if (refreshToken == null) {
+        debugPrint('ApiService: No refresh token found');
+        return false;
+      }
+
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/auth/refresh'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'refresh_token': refreshToken}),
+          )
+          .timeout(AppConfig.requestTimeout);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final newAccessToken = data['access_token'];
+        final newRefreshToken = data['refresh_token'];
+
+        if (newAccessToken != null) {
+          // Update stored tokens
+          await _storage.write(key: 'jwt_token', value: newAccessToken);
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('jwt_token', newAccessToken);
+
+          if (newRefreshToken != null) {
+            await _storage.write(key: 'refresh_token', value: newRefreshToken);
+            await prefs.setString('refresh_token', newRefreshToken);
+          }
+
+          debugPrint('ApiService: Token refreshed successfully');
+          return true;
+        }
+      }
+      debugPrint(
+        'ApiService: Token refresh failed with status ${response.statusCode}',
+      );
+      return false;
+    } catch (e) {
+      debugPrint('ApiService: Error refreshing token: $e');
+      return false;
+    }
+  }
+
+  // Method to refresh access token with retry logic and exponential backoff
+  Future<bool> _refreshAccessTokenWithRetry() async {
+    const int maxRetries = 5; // Increased from 3 to 5 for better reliability
+    const int baseDelayMs = 1000; // 1 second base delay
+
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        final bool refreshed = await _refreshAccessToken();
+        if (refreshed) {
+          if (attempt > 1) {
+            debugPrint(
+              'ApiService: Token refreshed successfully on attempt $attempt',
+            );
+          }
+          return true;
+        }
+
+        // If not the last attempt, wait before retrying
+        if (attempt < maxRetries) {
+          final int delayMs =
+              baseDelayMs *
+              (1 << (attempt - 1)); // Exponential backoff: 1s, 2s, 4s
+          debugPrint(
+            'ApiService: Token refresh attempt $attempt failed. Retrying in ${delayMs}ms...',
+          );
+          await Future.delayed(Duration(milliseconds: delayMs));
+        }
+      } catch (e) {
+        debugPrint(
+          'ApiService: Error during token refresh attempt $attempt: $e',
+        );
+        // If not the last attempt, wait before retrying
+        if (attempt < maxRetries) {
+          final int delayMs =
+              baseDelayMs *
+              (1 << (attempt - 1)); // Exponential backoff: 1s, 2s, 4s
+          debugPrint(
+            'ApiService: Token refresh attempt $attempt failed with exception. Retrying in ${delayMs}ms...',
+          );
+          await Future.delayed(Duration(milliseconds: delayMs));
+        }
+      }
+    }
+
+    debugPrint('ApiService: All $maxRetries token refresh attempts failed');
+    return false;
+  }
+
+  // Helper to retry a request with new token
+  Future<http.Response> _retryRequest(
+    String method,
+    String endpoint, {
+    Map<String, dynamic>? body,
+  }) async {
+    final headers = await _getHeaders();
+    final url = '$baseUrl/${normalizeEndpoint(endpoint)}';
+
+    switch (method) {
+      case 'GET':
+        return await http
+            .get(Uri.parse(url), headers: headers)
+            .timeout(AppConfig.requestTimeout);
+      case 'POST':
+        return await http
+            .post(
+              Uri.parse(url),
+              headers: headers,
+              body: body != null ? jsonEncode(body) : null,
+            )
+            .timeout(AppConfig.requestTimeout);
+      case 'PATCH':
+        return await http
+            .patch(
+              Uri.parse(url),
+              headers: headers,
+              body: body != null ? jsonEncode(body) : null,
+            )
+            .timeout(AppConfig.requestTimeout);
+      case 'DELETE':
+        return await http
+            .delete(Uri.parse(url), headers: headers)
+            .timeout(AppConfig.requestTimeout);
+      default:
+        throw Exception('Unsupported HTTP method: $method');
+    }
+  }
+
+  // Health check method to test server connectivity
+  Future<bool> checkServerHealth() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/health'), headers: await _getHeaders())
+          .timeout(AppConfig.requestTimeout);
+
+      if (response.statusCode == 200) {
+        return true;
+      } else {
+        return false;
+      }
+    } catch (e) {
+      debugPrint('Health check failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> saveToken(String token) async {
+    await _storage.write(key: 'jwt_token', value: token);
+  }
+
+  Future<void> clearToken() async {
+    await _storage.delete(key: 'jwt_token');
+  }
+
+  Future<String?> getToken() async {
+    return await _storage.read(key: 'jwt_token');
+  }
+
+  Future<void> saveUserId(String userId) async {
+    await _storage.write(key: 'user_id', value: userId);
+  }
+
+  Future<void> clearUserId() async {
+    await _storage.delete(key: 'user_id');
+  }
+}
+
+// Location-based API methods
+extension LocationApi on ApiService {
+  Future<dynamic> checkServiceAvailability(
+    double lat,
+    double lng,
+    double radius,
+  ) async {
+    return await get('locations/availability?lat=$lat&lng=$lng&radius=$radius');
+  }
+
+  Future<dynamic> getAvailableServices(
+    double lat,
+    double lng,
+    double radius,
+  ) async {
+    return await get('locations/services?lat=$lat&lng=$lng&radius=$radius');
+  }
+
+  Future<dynamic> getNearbyZones(
+    double lat,
+    double lng, [
+    double maxRadius = 2,
+  ]) async {
+    return await get(
+      'locations/zones/nearby?lat=$lat&lng=$lng&maxRadius=$maxRadius',
+    );
+  }
+
+  Future<dynamic> getServiceAreas(double lat, double lng) async {
+    return await get('locations/areas?lat=$lat&lng=$lng');
+  }
+
+  Future<dynamic> addToWaitlist(
+    double lat,
+    double lng,
+    int estimatedWaitTime, {
+    String? serviceId,
+  }) async {
+    final token = await getToken();
+    if (token == null) {
+      throw Exception('User not authenticated');
+    }
+
+    // Get user ID from token or storage
+    final userId = await _storage.read(key: 'user_id');
+    if (userId == null) {
+      throw Exception('User ID not found');
+    }
+
+    // Use provided serviceId or throw error if not provided
+    if (serviceId == null) {
+      throw Exception('Service ID is required for waitlist');
+    }
+
+    return await post('locations/waitlist', {
+      'userId': userId,
+      'serviceId': serviceId,
+      'lat': lat,
+      'lng': lng,
+      'estimatedWaitTime': estimatedWaitTime,
+    });
+  }
+
+  Future<dynamic> removeFromWaitlist() async {
+    // This would need to be implemented based on your waitlist management
+    return await delete('locations/waitlist/current');
+  }
+
+  Future<dynamic> updatePreferredLocation(
+    String userId,
+    double lat,
+    double lng,
+  ) async {
+    return await post('locations/user/$userId/location', {
+      'lat': lat,
+      'lng': lng,
+    });
+  }
+
+  Future<dynamic> updateWorkerLocation(
+    String workerId,
+    double lat,
+    double lng,
+  ) async {
+    return await post('locations/worker/$workerId/location', {
+      'lat': lat,
+      'lng': lng,
+    });
+  }
+
+  Future<dynamic> getWaitlistStatus(String userId) async {
+    return await get('locations/waitlist/status/$userId');
+  }
+}
+
+// Service Request API methods
+extension ServiceRequestApi on ApiService {
+  Future<dynamic> createServiceRequest({
+    required int serviceId,
+    required DateTime scheduledDate,
+    required String timeWindow,
+    required double priceSnapshot,
+    String source = 'ONE_TIME',
+  }) async {
+    return await post('service-requests', {
+      'serviceId': serviceId,
+      'date': scheduledDate.toIso8601String(),
+      'timeWindow': timeWindow,
+      'priceSnapshot': priceSnapshot,
+      'source': source,
+    });
+  }
+
+  Future<dynamic> getServiceRequestStatus(String requestId) async {
+    return await get('service-requests/$requestId');
+  }
+
+  Future<dynamic> assignServiceRequest(String requestId) async {
+    return await post('service-requests/$requestId/assign', {});
+  }
+
+  Future<dynamic> getServiceRequestAssignments() async {
+    return await get('service-requests/assignments');
+  }
+}
+
+// Address API methods
+extension AddressApi on ApiService {
+  Future<dynamic> saveAddress(Map<String, dynamic> addressData) async {
+    return await post('addresses', addressData);
+  }
+
+  Future<dynamic> getAddresses() async {
+    return await get('addresses');
+  }
+
+  Future<dynamic> getDefaultAddress() async {
+    return await get('addresses/default');
+  }
+
+  Future<dynamic> updateAddress(
+    int addressId,
+    Map<String, dynamic> addressData,
+  ) async {
+    return await patch('addresses/$addressId', addressData);
+  }
+
+  Future<dynamic> deleteAddress(String addressId) async {
+    return await delete('addresses/$addressId');
+  }
+
+  Future<dynamic> setDefaultAddress(String addressId) async {
+    return await patch('addresses/$addressId/set-default', {});
+  }
+}
+
+// Booking API methods
+extension BookingApi on ApiService {
+  Future<dynamic> createBookingFromServiceRequest({
+    required String serviceRequestId,
+  }) async {
+    return await post('bookings', {'serviceRequestId': serviceRequestId});
+  }
+
+  Future<dynamic> getBookingById(int bookingId) async {
+    return await get('bookings/$bookingId');
+  }
+
+  Future<dynamic> getBookingsByUserId(String userId) async {
+    return await get('bookings?userId=$userId');
+  }
+
+  Future<dynamic> getUpcomingBookings() async {
+    return await get('notifications/upcoming-bookings');
+  }
+
+  Future<dynamic> getAllBookings() async {
+    return await get('notifications/all-bookings');
+  }
+}
+
+// Service Profile API methods
+extension ServiceProfileApi on ApiService {
+  Future<dynamic> getServiceProfiles(String serviceType) async {
+    // Map frontend service types to backend enum values
+    String mappedType;
+    switch (serviceType.toLowerCase()) {
+      case 'cooking':
+        mappedType = 'COOK';
+        break;
+
+      case 'cleaning':
+        mappedType = 'CLEANING';
+        break;
+      default:
+        mappedType = serviceType.toUpperCase();
+    }
+    debugPrint('🔍 DEBUG: Mapping service type $serviceType to $mappedType');
+    final response = await get('service-profiles?serviceType=$mappedType');
+    debugPrint('🔍 DEBUG: Service profiles response: ${response.toString()}');
+    debugPrint('🔍 DEBUG: Response type: ${response.runtimeType}');
+    // Extract data from backend response format { success: true, data: [] }
+    if (response is Map) {
+      debugPrint('🔍 DEBUG: Response keys: ${response.keys.toList()}');
+      if (response.containsKey('data')) {
+        debugPrint(
+          '🔍 DEBUG: Data key found, value type: ${response['data'].runtimeType}',
+        );
+        return response['data'];
+      }
+    }
+    return response;
+  }
+
+  Future<dynamic> getServiceProfileById(int profileId) async {
+    return await get('service-profiles/$profileId');
+  }
+}
+
+// Payment API methods
+extension PaymentApi on ApiService {
+  Future<dynamic> createPaymentOrder({
+    required double amount,
+    required String currency,
+  }) async {
+    return await post('payments/create-order', {
+      'amount': amount,
+      'currency': currency,
+    });
+  }
+
+  Future<dynamic> createSubscriptionOrder({
+    required dynamic userId, // Support both int and String (UUID)
+    int? serviceProfileId,
+    int? customPrice,
+    required String preferredTimeWindow,
+    required DateTime startDate,
+    required double lat,
+    required double lng,
+    Map<String, dynamic>? customPlanData,
+  }) async {
+    final body = {
+      'userId': userId,
+      'preferredTimeWindow': preferredTimeWindow,
+      'startDate': startDate.toIso8601String(),
+      'billingCycle': 'MONTHLY',
+      'location': {'lat': lat, 'lng': lng},
+    };
+
+    if (serviceProfileId != null) {
+      body['serviceProfileId'] = serviceProfileId;
+    }
+
+    if (customPrice != null) {
+      body['customPrice'] = customPrice;
+      body['monthlyPriceSnapshot'] = customPrice;
+    }
+
+    if (customPlanData != null) {
+      body['customPlanData'] = customPlanData;
+    }
+
+    return await post('payments/create-subscription-order', body);
+  }
+
+  Future<dynamic> createSubscriptionAfterPayment({
+    required String paymentId,
+    required String orderId,
+    required String signature,
+    required Map<String, dynamic> subscriptionData,
+  }) async {
+    final body = {
+      'razorpayOrderId': orderId,
+      'razorpayPaymentId': paymentId,
+      'signature': signature,
+      'userId': subscriptionData['userId'],
+      'serviceProfileId': subscriptionData['serviceProfileId'],
+      'preferredTimeWindow': subscriptionData['preferredTimeWindow'],
+      'startDate': subscriptionData['startDate'],
+      'location': subscriptionData['location'],
+      'monthlyPriceSnapshot': subscriptionData['monthlyPriceSnapshot'],
+    };
+    // Include customPrice for custom plans
+    if (subscriptionData['serviceProfileId'] == null) {
+      body['customPrice'] = subscriptionData['monthlyPriceSnapshot'];
+    }
+    // Include customPlanData if present (for custom plans)
+    if (subscriptionData.containsKey('customPlanData') &&
+        subscriptionData['customPlanData'] != null) {
+      body['customPlanData'] = subscriptionData['customPlanData'];
+    }
+    return await post('payments/confirm-subscription', body);
+  }
+
+  Future<dynamic> verifyPayment({
+    required String razorpayOrderId,
+    required String razorpayPaymentId,
+    required String signature,
+    String? fcmToken,
+  }) async {
+    final data = {
+      'razorpayOrderId': razorpayOrderId,
+      'razorpayPaymentId': razorpayPaymentId,
+      'signature': signature,
+    };
+    if (fcmToken != null) {
+      data['fcmToken'] = fcmToken;
+    }
+    return await post('payments/verify', data);
+  }
+}
+
+// Subscription API methods
+extension SubscriptionApi on ApiService {
+  Future<dynamic> createSubscription({
+    required int serviceProfileId,
+    required String frequency,
+    required String timeWindowStart,
+    required String timeWindowEnd,
+    required DateTime startDate,
+    required DateTime endDate,
+    required double lat,
+    required double lng,
+  }) async {
+    return await post('subscriptions', {
+      'serviceProfileId': serviceProfileId,
+      'frequency': frequency,
+      'timeWindowStart': timeWindowStart,
+      'timeWindowEnd': timeWindowEnd,
+      'startDate': startDate.toIso8601String(),
+      'endDate': endDate.toIso8601String(),
+      'billingCycle': 'MONTHLY',
+      'location': {'lat': lat, 'lng': lng},
+    });
+  }
+
+  Future<dynamic> getSubscriptions() async {
+    return await get('subscriptions');
+  }
+
+  Future<dynamic> getUserSubscriptions(String userId) async {
+    return await get('subscriptions/user/$userId');
+  }
+
+  Future<dynamic> getSubscriptionById(int subscriptionId) async {
+    return await get('subscriptions/$subscriptionId');
+  }
+
+  Future<dynamic> updateSubscriptionStatus(
+    int subscriptionId,
+    String status,
+  ) async {
+    return await patch('subscriptions/$subscriptionId/status', {
+      'status': status,
+    });
+  }
+
+  Future<dynamic> pauseSubscription(int subscriptionId) async {
+    return await patch('subscriptions/$subscriptionId/status', {
+      'status': 'PAUSED',
+    });
+  }
+
+  Future<dynamic> resumeSubscription(int subscriptionId) async {
+    return await patch('subscriptions/$subscriptionId/status', {
+      'status': 'ACTIVE',
+    });
+  }
+
+  Future<dynamic> cancelSubscription(int subscriptionId) async {
+    return await patch('subscriptions/$subscriptionId/status', {
+      'status': 'CANCELLED',
+    });
+  }
+}
+
+// Worker API methods for Worker App
+extension WorkerApi on ApiService {
+  /**
+   * Get current worker's profile (from JWT token)
+   * GET /workers/me
+   */
+  Future<dynamic> getMyWorkerProfile() async {
+    return await get('workers/me');
+  }
+
+  /**
+   * Get current worker's bookings
+   * GET /workers/me/bookings
+   */
+  Future<dynamic> getMyWorkerBookings({String? status}) async {
+    if (status != null && status.isNotEmpty) {
+      return await get('workers/me/bookings?status=$status');
+    }
+    return await get('workers/me/bookings');
+  }
+
+  /**
+   * Get current worker's earnings summary
+   * GET /workers/me/earnings
+   */
+  Future<dynamic> getMyWorkerEarnings() async {
+    return await get('workers/me/earnings');
+  }
+
+  /**
+   * Get nearby worker count for customer trust layer
+   * GET /workers/nearby/count?lat={lat}&long={lng}&radius={radius}
+   */
+  Future<Map<String, dynamic>?> getNearbyWorkersCount(double lat, double lng, {double radius = 5.0}) async {
+    try {
+      final response = await get('workers/nearby/count?lat=$lat&long=$lng&radius=$radius');
+      return response as Map<String, dynamic>?;
+    } catch (e) {
+      debugPrint('ApiService: getNearbyWorkersCount error: $e');
+      return null;
+    }
+  }
+
+  /**
+   * Get worker stats (avg response time, etc.)
+   * GET /workers/stats
+   */
+  Future<Map<String, dynamic>?> getWorkerStats() async {
+    try {
+      final response = await get('workers/stats');
+      return response as Map<String, dynamic>?;
+    } catch (e) {
+      debugPrint('ApiService: getWorkerStats error: $e');
+      return null;
+    }
+  }
+
+  /**
+   * Update worker availability
+   * PATCH /workers/me/availability
+   */
+  Future<dynamic> updateMyWorkerAvailability(bool isAvailable) async {
+    return await patch('workers/me/availability', {'isAvailable': isAvailable});
+  }
+
+  /**
+   * Accept a booking
+   * POST /workers/bookings/:id/accept
+   */
+  Future<dynamic> acceptWorkerBooking(String bookingId) async {
+    return await post('workers/bookings/$bookingId/accept', {});
+  }
+
+  /**
+   * Reject a booking
+   * POST /workers/bookings/:id/reject
+   */
+  Future<dynamic> rejectWorkerBooking(
+    String bookingId, {
+    String? reason,
+  }) async {
+    return await post('workers/bookings/$bookingId/reject', {
+      if (reason != null) 'reason': reason,
+    });
+  }
+
+  /**
+   * Start a job (mark as in progress)
+   * POST /workers/bookings/:id/start
+   */
+  Future<dynamic> startWorkerBooking(String bookingId) async {
+    return await post('workers/bookings/$bookingId/start', {});
+  }
+
+  /**
+   * Complete a job
+   * POST /workers/bookings/:id/complete
+   */
+  Future<dynamic> completeWorkerBooking(String bookingId) async {
+    return await post('workers/bookings/$bookingId/complete', {});
+  }
+}
+
+// Admin API methods for Admin Dashboard
+extension AdminApi on ApiService {
+  /**
+   * Get dashboard statistics
+   * GET /admin/dashboard
+   */
+  Future<dynamic> getAdminDashboard() async {
+    return await get('admin/dashboard');
+  }
+
+  /**
+   * Get all workers with filters
+   * GET /admin/workers
+   */
+  Future<dynamic> getAdminWorkers({
+    bool? isAvailable,
+    double? minRating,
+    String? serviceId,
+  }) async {
+    final queryParams = <String>[];
+    if (isAvailable != null) queryParams.add('isAvailable=$isAvailable');
+    if (minRating != null) queryParams.add('minRating=$minRating');
+    if (serviceId != null) queryParams.add('serviceId=$serviceId');
+
+    final query = queryParams.isNotEmpty ? '?${queryParams.join('&')}' : '';
+    return await get('admin/workers$query');
+  }
+
+  /**
+   * Get worker by ID
+   * GET /admin/workers/:id
+   */
+  Future<dynamic> getAdminWorkerById(int workerId) async {
+    return await get('admin/workers/$workerId');
+  }
+
+  /**
+   * Update worker details
+   * PUT /admin/workers/:id
+   */
+  Future<dynamic> updateAdminWorker(
+    int workerId,
+    Map<String, dynamic> updates,
+  ) async {
+    return await post('admin/workers/$workerId', updates);
+  }
+
+  /**
+   * Toggle worker availability
+   * PATCH /admin/workers/:id/availability
+   */
+  Future<dynamic> toggleAdminWorkerAvailability(
+    int workerId,
+    bool isAvailable,
+  ) async {
+    return await patch('admin/workers/$workerId/availability', {
+      'isAvailable': isAvailable,
+    });
+  }
+
+  /**
+   * Get all bookings with filters
+   * GET /admin/bookings
+   */
+  Future<dynamic> getAdminBookings({
+    String? status,
+    String? startDate,
+    String? endDate,
+    int? workerId,
+    String? userId,
+  }) async {
+    final queryParams = <String>[];
+    if (status != null) queryParams.add('status=$status');
+    if (startDate != null) queryParams.add('startDate=$startDate');
+    if (endDate != null) queryParams.add('endDate=$endDate');
+    if (workerId != null) queryParams.add('workerId=$workerId');
+    if (userId != null) queryParams.add('userId=$userId');
+
+    final query = queryParams.isNotEmpty ? '?${queryParams.join('&')}' : '';
+    return await get('admin/bookings$query');
+  }
+
+  /**
+   * Get booking by ID
+   * GET /admin/bookings/:id
+   */
+  Future<dynamic> getAdminBookingById(String bookingId) async {
+    return await get('admin/bookings/$bookingId');
+  }
+
+  /**
+   * Update booking status
+   * PATCH /admin/bookings/:id/status
+   */
+  Future<dynamic> updateAdminBookingStatus(
+    String bookingId,
+    String status,
+  ) async {
+    return await patch('admin/bookings/$bookingId/status', {'status': status});
+  }
+
+  /**
+   * Cancel a booking
+   * POST /admin/bookings/:id/cancel
+   */
+  Future<dynamic> cancelAdminBooking(String bookingId, {String? reason}) async {
+    return await post('admin/bookings/$bookingId/cancel', {
+      if (reason != null) 'reason': reason,
+    });
+  }
+
+  /**
+   * Get revenue analytics
+   * GET /admin/analytics/revenue
+   */
+  Future<dynamic> getAdminRevenueAnalytics({String? period}) async {
+    if (period != null) {
+      return await get('admin/analytics/revenue?period=$period');
+    }
+    return await get('admin/analytics/revenue');
+  }
+
+  /**
+   * Get booking analytics
+   * GET /admin/analytics/bookings
+   */
+  Future<dynamic> getAdminBookingAnalytics() async {
+    return await get('admin/analytics/bookings');
+  }
+
+  /**
+   * Get all users
+   * GET /admin/users
+   */
+  Future<dynamic> getAdminUsers() async {
+    return await get('admin/users');
+  }
+
+  /**
+   * Get user by ID
+   * GET /admin/users/:id
+   */
+  Future<dynamic> getAdminUserById(String userId) async {
+    return await get('admin/users/$userId');
+  }
+}

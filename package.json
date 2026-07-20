@@ -1,0 +1,28 @@
+{
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "dotenv": "^17.2.3",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^7.0.12",
+    "pg": "^8.17.2",
+    "twilio": "^5.11.2",
+    "uuid": "^13.0.0"
+  },
+  "name": "newsevaq",
+  "version": "1.0.0",
+  "main": "add-missing-columns.js",
+  "scripts": {
+    "build": "npm install && npm run build",
+    "start:dev": "cd flutter-nest-househelp-master && npm run start:dev",
+    "start:prod": "cd flutter-nest-househelp-master && node dist/src/main",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "axios": "^1.13.4"
+  },
+  "description": ""
+}

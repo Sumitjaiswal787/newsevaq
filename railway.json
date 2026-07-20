@@ -1,0 +1,23 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "name": "SEVAQ",
+  "watchPatterns": [
+    "flutter-nest-househelp-master/**/*"
+  ],
+  "build": {},
+  "deploy": {
+    "numReplicas": 1,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyLimit": 5,
+    "sleepApplication": false,
+    "preDeploy": {
+      "command": "npm run migration:run"
+    }
+  },
+  "env": {
+    "SYNCHRONIZE": "false",
+    "NODE_ENV": "production",
+    "LOG_LEVEL": "info",
+    "DB_SSL_REQUIRE": "true"
+  }
+}

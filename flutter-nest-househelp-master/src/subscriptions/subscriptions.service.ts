@@ -1,0 +1,805 @@
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, DataSource, DeepPartial, MoreThanOrEqual } from 'typeorm';
+import {
+  Subscription,
+  PreferredTimeWindow,
+  SubscriptionStatus,
+  BillingCycle,
+} from './entities/subscription.entity';
+import { ServiceProfilesService } from '../service-profiles/service-profiles.service';
+import { ServiceProfile, ServiceType } from '../service-profiles/entities/service-profile.entity';
+import { Booking, BookingStatus, BookingType, LocationData } from '../bookings/entities/booking.entity';
+import { SubscriptionWorkerSyncService } from '../subscriptions/subscription-worker-sync.service';
+import { Service } from '../services/entities/service.entity';
+import { NotificationsService } from '../notifications/notifications.service';
+import { User } from '../users/entities/user.entity';
+import { v4 as uuidv4 } from 'uuid';
+
+@Injectable()
+export class SubscriptionsService implements OnApplicationBootstrap {
+  private readonly logger = new Logger(SubscriptionsService.name);
+
+  constructor(
+    @InjectRepository(Subscription)
+    private subscriptionRepository: Repository<Subscription>,
+    @InjectRepository(Booking)
+    private bookingsRepository: Repository<Booking>,
+    private serviceProfilesService: ServiceProfilesService,
+    private dataSource: DataSource,
+    private subscriptionWorkerSyncService: SubscriptionWorkerSyncService,
+    private notificationsService: NotificationsService,
+  ) {}
+
+  /**
+   * Map service type to a numeric service ID for booking assignment.
+   * This ensures subscription bookings have a valid serviceId so the
+   * OnDemandAssignmentScheduler can assign workers.
+   */
+  private async getServiceIdForSubscription(
+    serviceProfileId: number | null,
+    customPlanData?: any,
+  ): Promise<number | undefined> {
+    let serviceType: string | undefined;
+
+    // 1. Try to get serviceType from serviceProfile
+    if (serviceProfileId !== null && serviceProfileId !== undefined) {
+      try {
+        const serviceProfile = await this.serviceProfilesService.getProfileById(serviceProfileId);
+        if (serviceProfile) {
+          serviceType = serviceProfile.serviceType as string;
+        }
+      } catch (error: unknown) {
+        const err = error as Error;
+        this.logger.warn(`Could not fetch service profile ${serviceProfileId}: ${err.message}`);
+      }
+    }
+
+    // 2. Fallback: try customPlanData.serviceType
+    if (!serviceType && customPlanData && customPlanData.serviceType) {
+      serviceType = customPlanData.serviceType;
+    }
+
+    if (!serviceType) {
+      this.logger.warn('No serviceType found for subscription, cannot determine serviceId');
+      return undefined;
+    }
+
+    // Normalize serviceType to category string (same mapping as assignment.worker.ts)
+    const normalizedType = String(serviceType).toUpperCase();
+    let category: string | null = null;
+
+    // Map using ServiceType enum values and common variants
+    // Handle both 'COOK' and 'COOKING' variants
+    if (normalizedType === ServiceType.COOK || normalizedType === 'COOK' || normalizedType === 'COOKING' || normalizedType.includes('COOK')) {
+      category = 'Cooking';
+      this.logger.log(`Mapped serviceType "${serviceType}" to category "Cooking"`);
+    } else if (normalizedType === ServiceType.MAID || normalizedType === 'MAID' || normalizedType.includes('MAID')) {
+      category = 'Maid';
+      this.logger.log(`Mapped serviceType "${serviceType}" to category "Maid"`);
+    } else if (normalizedType === ServiceType.CLEANING || normalizedType === 'CLEANING' || normalizedType.includes('CLEAN')) {
+      category = 'Cleaning';
+      this.logger.log(`Mapped serviceType "${serviceType}" to category "Cleaning"`);
+    } else {
+      this.logger.warn(`Unknown serviceType "${serviceType}" (normalized: "${normalizedType}"), cannot map to category`);
+    }
+
+    if (!category) {
+      this.logger.error(`No category mapped for serviceType "${serviceType}"`);
+      return undefined;
+    }
+
+    // Find service by category
+    const serviceRepo = this.dataSource.getRepository(Service);
+    
+    this.logger.log(`Looking for service with category "${category}"...`);
+    const services = await serviceRepo.find({
+      where: { category },
+      order: { basePrice: 'ASC' }, // Pick service with lowest price (typically "Home Cleaning")
+      take: 1,
+    });
+    
+    if (services.length > 0) {
+      this.logger.log(`Found service: id=${services[0].id}, name="${services[0].name}", basePrice=${services[0].basePrice}`);
+    }
+
+    if (services.length === 0) {
+      this.logger.error(`No service found for category "${category}". Checking all services...`);
+      const allServices = await serviceRepo.find();
+      this.logger.error(`Available services: ${JSON.stringify(allServices.map(s => ({ id: s.id, category: s.category, name: s.name })))}`);
+      return undefined;
+    }
+
+    this.logger.log(`Mapped serviceType "${serviceType}" to service ID ${services[0].id} (category: ${category})`);
+    return services[0].id;
+  }
+
+  async createSubscription(
+    userId: string,
+    serviceProfileId: number | null,
+    preferredTimeWindow: PreferredTimeWindow,
+    startDate: Date,
+    location: { lat: number; lng: number; address?: string },
+    monthlyPriceSnapshot: number,
+    customPlanData?: any,
+  ): Promise<Subscription> {
+    let serviceProfile = null;
+    
+    if (serviceProfileId !== null && serviceProfileId !== undefined) {
+      serviceProfile = await this.serviceProfilesService.getProfileById(serviceProfileId);
+      if (!serviceProfile) {
+        throw new Error('Service profile not found');
+      }
+    }
+    
+    // For custom plans, serviceProfileId can be null - we use the provided monthlyPriceSnapshot directly
+
+    // ✅ FIX: For custom plans, ALWAYS create new subscription (don't reuse existing ones)
+    // A user can have MULTIPLE active subscriptions for DIFFERENT service types
+    let existingSubscription = null;
+    
+    if (serviceProfileId === null || serviceProfileId === undefined) {
+      // For custom plans, NEVER reuse existing subscriptions
+      // User might want multiple different custom services
+      this.logger.log(`🔍 Custom plan detected - always creating NEW subscription (not reusing existing)`);
+    } else {
+      // For serviceProfileId subscriptions, only check if SAME serviceProfileId exists
+      this.logger.log(`🔍 Checking for existing active subscription for user ${userId} with serviceProfileId ${serviceProfileId}`);
+      
+      existingSubscription = await this.subscriptionRepository.findOne({
+        where: {
+          userId,
+          serviceProfileId: serviceProfileId,
+          status: SubscriptionStatus.ACTIVE,
+        },
+      });
+    }
+
+    if (existingSubscription) {
+      throw new Error(
+        `You already have an active subscription for this service (Subscription #${existingSubscription.id}). Please cancel it first or manage your existing subscription.`,
+      );
+    }
+
+    // ✅ VALIDATION: Ensure start date is not in the past
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const startDateNormalized = new Date(startDate);
+    startDateNormalized.setHours(0, 0, 0, 0);
+    
+    if (startDateNormalized < today) {
+      throw new Error('Subscription start date cannot be in the past. Please select a future date.');
+    }
+
+    const subscriptionData: any = {
+      publicId: uuidv4(),
+      userId,
+      preferredTimeWindow,
+      startDate,
+      status: SubscriptionStatus.ACTIVE,
+      billingCycle: BillingCycle.MONTHLY,
+      location,
+    };
+    
+    // Only set serviceProfileId if it's not null (custom plan)
+    if (serviceProfileId !== null && serviceProfileId !== undefined) {
+      subscriptionData.serviceProfileId = serviceProfileId;
+    }
+    
+    // Store customPlanData if provided (for custom plans)
+    if (customPlanData !== undefined && customPlanData !== null) {
+      subscriptionData.customPlanData = customPlanData;
+    }
+    
+    // ✅ FIX: For custom plans, use calculatedPrice from customPlanData
+    // This ensures monthlyPriceSnapshot matches the actual calculated price
+    this.logger.log(`🔍 DEBUG createSubscription: monthlyPriceSnapshot param=${monthlyPriceSnapshot}, customPlanData=${JSON.stringify(customPlanData)}`);
+    
+    if (customPlanData && customPlanData.calculatedPrice !== undefined) {
+      this.logger.log(`🔍 DEBUG: Using calculatedPrice from customPlanData: ${customPlanData.calculatedPrice}`);
+      subscriptionData.monthlyPriceSnapshot = Number(customPlanData.calculatedPrice);
+    } else if (monthlyPriceSnapshot !== undefined && monthlyPriceSnapshot !== null) {
+      this.logger.log(`🔍 DEBUG: Using monthlyPriceSnapshot param: ${monthlyPriceSnapshot}`);
+      subscriptionData.monthlyPriceSnapshot = monthlyPriceSnapshot;
+    } else if (serviceProfile) {
+      this.logger.log(`🔍 DEBUG: Using serviceProfile.monthlyPrice: ${serviceProfile.monthlyPrice}`);
+      subscriptionData.monthlyPriceSnapshot = Number(serviceProfile.monthlyPrice);
+    }
+    
+    this.logger.log(`🔍 DEBUG: Final monthlyPriceSnapshot=${subscriptionData.monthlyPriceSnapshot}`);
+    
+    const subscription = this.subscriptionRepository.create(subscriptionData);
+
+    if (!preferredTimeWindow) {
+      throw new Error('Preferred time window is required');
+    }
+
+    const savedSubscriptions = await this.subscriptionRepository.save(subscription);
+    const savedSubscription = Array.isArray(savedSubscriptions) ? savedSubscriptions[0] : savedSubscriptions;
+
+    // ✅ Determine serviceId for bookings (needed for worker assignment)
+    const mappedServiceId = await this.getServiceIdForSubscription(serviceProfileId, customPlanData);
+    if (mappedServiceId) {
+      this.logger.log(`Using serviceId ${mappedServiceId} for subscription bookings`);
+    } else {
+      this.logger.warn('No serviceId mapped - worker assignment may fail for these bookings');
+    }
+
+    // ✅ Generate 26 daily bookings UPFRONT immediately at purchase time (skipping Sundays)
+    let generatedCount = 0;
+    let dayOffset = 0;
+    while (generatedCount < 26) {
+      const bookingDate = new Date(startDate);
+      bookingDate.setDate(bookingDate.getDate() + dayOffset);
+      dayOffset++;
+
+      // 0 = Sunday
+      if (bookingDate.getDay() === 0) {
+        this.logger.log(`Skipping Sunday ${bookingDate.toISOString().split('T')[0]} for subscription bookings`);
+        continue;
+      }
+       
+      const timeWindows = this.getMealPlanTimeWindows(customPlanData, preferredTimeWindow);
+
+      for (const window of timeWindows) {
+        try {
+          const dateStr = bookingDate.toISOString().split('T')[0];
+          const locationData: LocationData = {
+            lat: location.lat,
+            lng: location.lng,
+            latitude: location.lat,
+            longitude: location.lng,
+            address: location.address || '',
+          };
+
+          let generatedOtp: string | undefined = undefined;
+          if (generatedCount === 0) {
+            generatedOtp = Math.floor(1000 + Math.random() * 9000).toString();
+          }
+
+          const bookingData: DeepPartial<Booking> = {
+            userId,
+            serviceId: mappedServiceId,
+            date: dateStr,
+            startTime: window.startTime,
+            endTime: window.endTime,
+            location: locationData,
+            type: BookingType.SUBSCRIPTION,
+            subscriptionId: savedSubscription.id,
+            status: BookingStatus.REQUESTED,
+            isPaid: savedSubscription.isPaid,
+            otp: generatedOtp,
+            isOtpVerified: false,
+            notes: `Auto generated for subscription ${savedSubscription.id} - Day ${generatedCount + 1}${window.noteSuffix ? ' - ' + window.noteSuffix : ''}`,
+          };
+
+          const booking = this.bookingsRepository.create(bookingData);
+          await this.bookingsRepository.save(booking);
+          this.logger.log(`✅ Created booking day ${generatedCount + 1} (${window.startTime} - ${window.endTime}) for subscription ${savedSubscription.id}`);
+
+          // Send customer notification
+          try {
+            const user = await this.dataSource.getRepository(User).findOne({
+              where: { publicId: userId }
+            });
+            
+            if (user) {
+              const savedBooking = await this.bookingsRepository.findOne({
+                where: { id: booking.id },
+                relations: ['service'],
+              });
+              
+              if (savedBooking) {
+                await this.notificationsService.notifyUserBookingConfirmation(user, savedBooking);
+                this.logger.log(`✅ Customer notification sent for booking ${booking.id} to user ${user.id}`);
+              }
+            }
+          } catch (notifyError: unknown) {
+            this.logger.error(`Failed to send customer notification: ${notifyError instanceof Error ? notifyError.message : 'Unknown error'}`);
+          }
+        } catch (error: any) {
+          this.logger.error(`❌ FAILED to create booking day ${generatedCount + 1} for subscription ${savedSubscription.id}: ${error?.message ?? String(error)}`, error?.stack);
+          throw error;
+        }
+      }
+      generatedCount++;
+    }
+
+    this.logger.log(`✅ SUCCESS: Created all 26 bookings for subscription ${savedSubscription.id}`);
+
+    return savedSubscription;
+  }
+
+  /**
+     * Generate weekly bookings for an existing subscription.
+     * Used when a subscription is renewed and needs future bookings.
+     *
+     * @param subscriptionId - The subscription ID
+     * @param startDate - The start date for the first new booking
+     * @param weeks - Number of weekly bookings to generate (default 4)
+     */
+   async generateBookingsForSubscription(
+     subscriptionId: number,
+     startDate: Date,
+     weeks: number = 4,
+   ): Promise<void> {
+     // Load subscription with all necessary fields
+     const subscription = await this.subscriptionRepository.findOne({
+       where: { id: subscriptionId },
+     });
+ 
+     if (!subscription) {
+       throw new Error(`Subscription ${subscriptionId} not found`);
+     }
+ 
+     const { userId, serviceProfileId, location, preferredTimeWindow } = subscription;
+ 
+     if (!location) {
+       throw new Error(
+         `Subscription ${subscriptionId} has no location set. Cannot generate bookings.`,
+       );
+     }
+ 
+      // Build location data
+      const locationData: LocationData = {
+        lat: location.lat,
+        lng: location.lng,
+        latitude: location.lat,
+        longitude: location.lng,
+        address: location.address || '',
+      };
+  
+      // ✅ Derive serviceId from subscription (handles both serviceProfileId and customPlanData)
+      const derivedServiceId = await this.getServiceIdForSubscription(
+        serviceProfileId,
+        (subscription as any).customPlanData,
+      );
+  
+      let createdCount = 0;
+      let generatedCount = 0;
+      let dayOffset = 0;
+  
+      while (generatedCount < 26) {
+        const bookingDate = new Date(startDate);
+        bookingDate.setDate(bookingDate.getDate() + dayOffset);
+        dayOffset++;
+
+        // 0 = Sunday
+        if (bookingDate.getDay() === 0) {
+          this.logger.log(`Skipping Sunday ${bookingDate.toISOString().split('T')[0]} for subscription bookings`);
+          continue;
+        }
+
+        const dateStr = bookingDate.toISOString().split('T')[0];
+  
+        // Skip if a booking already exists for this subscription on this date
+        const existing = await this.bookingsRepository.findOne({
+          where: {
+            subscriptionId,
+            date: dateStr,
+          },
+        });
+        if (existing) {
+          this.logger.debug(
+            `Booking for ${dateStr} already exists for subscription ${subscriptionId}, skipping`,
+          );
+          generatedCount++;
+          continue;
+        }
+  
+        const timeWindows = this.getMealPlanTimeWindows((subscription as any).customPlanData, preferredTimeWindow);
+  
+        for (const window of timeWindows) {
+          try {
+            const bookingData: DeepPartial<Booking> = {
+              userId,
+              serviceId: derivedServiceId,
+              date: dateStr,
+              startTime: window.startTime,
+              endTime: window.endTime,
+              location: locationData,
+              type: BookingType.SUBSCRIPTION,
+              subscriptionId,
+              status: BookingStatus.REQUESTED,
+              notes: `Auto-generated for subscription ${subscriptionId} - Day ${generatedCount + 1}${window.noteSuffix ? ' - ' + window.noteSuffix : ''}`,
+            };
+      
+            const booking = this.bookingsRepository.create(bookingData);
+            await this.bookingsRepository.save(booking);
+            createdCount++;
+  
+            // Send customer notification for subscription booking
+            try {
+              const user = await this.dataSource.getRepository(User).findOne({
+                where: { publicId: userId }
+              });
+              
+              if (user) {
+                const savedBooking = await this.bookingsRepository.findOne({
+                  where: { id: booking.id },
+                  relations: ['service'],
+                });
+                
+                if (savedBooking) {
+                  await this.notificationsService.notifyUserBookingConfirmation(user, savedBooking);
+                  this.logger.log(`✅ Customer notification sent for booking ${booking.id} to user ${user.id}`);
+                }
+              }
+            } catch (notifyError: unknown) {
+              const errorMessage = notifyError instanceof Error ? notifyError.message : 'Unknown error';
+              this.logger.error(`Failed to send customer notification: ${errorMessage}`);
+            }
+          } catch (error: any) {
+            this.logger.error(`❌ FAILED to create booking day ${generatedCount + 1} for subscription ${subscriptionId}: ${error?.message ?? String(error)}`, error?.stack);
+            throw error;
+          }
+        }
+        
+        this.logger.log(
+          `✅ Created booking for day ${generatedCount + 1} for subscription ${subscriptionId} on ${dateStr}`,
+        );
+        generatedCount++;
+      }
+  
+      this.logger.log(
+        `✅ Generated ${createdCount} new bookings for subscription ${subscriptionId}`,
+      );
+   }
+ 
+   /**
+    * On application bootstrap, check for active subscriptions with no upcoming bookings
+    * and generate missing weekly bookings for them
+    */
+   async onApplicationBootstrap(): Promise<void> {
+     this.logger.log('Running bootstrap check for subscriptions with missing bookings...');
+     try {
+       const result = await this.generateMissingBookingsForActiveSubscriptions();
+       this.logger.log(
+         `Bootstrap check complete: ${result.subscriptionsChecked} subscriptions checked, ${result.bookingsGenerated} bookings generated`,
+       );
+      } catch (error: any) {
+        this.logger.error(
+          `Error during bootstrap check for missing bookings: ${error.message}`,
+          error.stack,
+        );
+      }
+    }
+
+    /**
+    * Generate missing weekly bookings for all active subscriptions that have no upcoming bookings
+    * This handles the case where subscriptions are renewed but no new bookings are created
+    */
+   async generateMissingBookingsForActiveSubscriptions(): Promise<{
+     subscriptionsChecked: number;
+     bookingsGenerated: number;
+   }> {
+     let totalBookingsGenerated = 0;
+     let subscriptionsChecked = 0;
+ 
+     try {
+       // Find all active subscriptions
+       const activeSubscriptions = await this.subscriptionRepository.find({
+         where: {
+           status: SubscriptionStatus.ACTIVE,
+         },
+         relations: ['user', 'serviceProfile'],
+       });
+ 
+       this.logger.log(
+         `Found ${activeSubscriptions.length} active subscriptions to check`,
+       );
+ 
+       for (const subscription of activeSubscriptions) {
+         subscriptionsChecked++;
+ 
+         // Check if subscription has any upcoming bookings
+         const today = new Date().toISOString().split('T')[0];
+         const existingBookings = await this.bookingsRepository.find({
+           where: {
+             subscriptionId: subscription.id,
+             date: MoreThanOrEqual(today),
+           },
+           order: { date: 'ASC' },
+         });
+ 
+         if (existingBookings.length < 26) {
+           this.logger.log(
+             `Subscription ${subscription.id} has only ${existingBookings.length} upcoming bookings. Generating daily bookings up to 26 working days...`,
+           );
+ 
+           // Determine start date - start from the last existing booking date + 1 day, or subscription start date, or today
+           let lastDate = subscription.startDate ? new Date(subscription.startDate) : new Date();
+           if (existingBookings.length > 0) {
+             const lastBooking = existingBookings[existingBookings.length - 1];
+             lastDate = new Date(lastBooking.date);
+             lastDate.setDate(lastDate.getDate() + 1);
+           }
+ 
+           const location = (subscription as any).location || subscription.user;
+           if (!location) {
+             this.logger.error(`Subscription ${subscription.id} has no location data. Skipping.`);
+             continue;
+           }
+ 
+           const locationData: LocationData = {
+             lat: location.latitude || location.lat || 0,
+             lng: location.longitude || location.lng || 0,
+             latitude: location.latitude || location.lat || 0,
+             longitude: location.longitude || location.lng || 0,
+             address: location.address || '',
+           };
+ 
+           const derivedServiceId = await this.getServiceIdForSubscription(
+             subscription.serviceProfileId,
+             (subscription as any).customPlanData,
+           );
+ 
+           let generatedCount = existingBookings.length;
+           let dayOffset = 0;
+           let bookingsCreated = 0;
+ 
+           while (generatedCount < 26) {
+             const bookingDate = new Date(lastDate);
+             bookingDate.setDate(bookingDate.getDate() + dayOffset);
+             dayOffset++;
+ 
+             // 0 = Sunday
+             if (bookingDate.getDay() === 0) {
+               continue;
+             }
+ 
+             const dateStr = bookingDate.toISOString().split('T')[0];
+ 
+             // Double check safety
+             const exists = await this.bookingsRepository.findOne({
+               where: {
+                 subscriptionId: subscription.id,
+                 date: dateStr,
+               },
+             });
+ 
+             if (exists) {
+               generatedCount++;
+               continue;
+             }
+ 
+             const timeWindows = this.getMealPlanTimeWindows(
+               (subscription as any).customPlanData,
+               subscription.preferredTimeWindow || 'morning'
+             );
+ 
+             for (const window of timeWindows) {
+               try {
+                 const bookingData: DeepPartial<Booking> = {
+                   userId: subscription.userId,
+                   serviceId: derivedServiceId,
+                   date: dateStr,
+                   startTime: window.startTime,
+                   endTime: window.endTime,
+                   location: locationData,
+                   type: BookingType.SUBSCRIPTION,
+                   subscriptionId: subscription.id,
+                   status: BookingStatus.REQUESTED,
+                   notes: `Auto-generated for subscription ${subscription.id} - Day ${generatedCount + 1}${window.noteSuffix ? ' - ' + window.noteSuffix : ''}`,
+                 };
+ 
+                 const booking = this.bookingsRepository.create(bookingData);
+                 await this.bookingsRepository.save(booking);
+                 bookingsCreated++;
+                 totalBookingsGenerated++;
+               } catch (err: any) {
+                 this.logger.error(`Failed to create missing booking for subscription ${subscription.id} on ${dateStr}: ${err.message}`);
+               }
+             }
+ 
+             generatedCount++;
+           }
+ 
+           this.logger.log(
+             `Generated ${bookingsCreated} missing bookings for subscription ${subscription.id}`,
+           );
+         } else {
+           this.logger.debug(
+             `Subscription ${subscription.id} already has ${existingBookings.length} upcoming bookings, skipping`,
+           );
+         }
+       }
+ 
+       return {
+         subscriptionsChecked,
+         bookingsGenerated: totalBookingsGenerated,
+       };
+     } catch (error: any) {
+       this.logger.error(
+         `Error generating missing bookings: ${error.message}`,
+         error.stack,
+       );
+       throw error;
+     }
+   }
+
+  /**
+   * Resolves a user identifier to a UUID.
+   * Handles legacy integer user IDs by looking up the user's actual UUID.
+   */
+  private async resolveUserIdToUuid(userId: string): Promise<string> {
+    // Check if userId is already a valid UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(userId)) {
+      return userId;
+    }
+
+     // If it's a legacy integer ID, look up the user's UUID (publicId)
+    try {
+      const userResult = await this.dataSource.query(
+        'SELECT "publicId" FROM "user" WHERE id::text = $1 LIMIT 1',
+        [userId]
+      );
+      
+      if (userResult && userResult.length > 0) {
+        return userResult[0].publicId;
+      }
+      
+      // If no user found with integer ID, return original userId
+      // This will result in no subscriptions found
+      return userId;
+    } catch (error) {
+      // If query fails, return original userId
+      return userId;
+    }
+  }
+
+  async getSubscriptionsByUserId(userId: string): Promise<Subscription[]> {
+    // Resolve legacy integer IDs to UUID
+    const resolvedUserId = await this.resolveUserIdToUuid(userId);
+    
+    return this.subscriptionRepository.find({
+      where: { userId: resolvedUserId },
+      relations: ['serviceProfile', 'assignedWorker', 'assignedWorker.user', 'bookings', 'bookings.service'],
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async getSubscriptionById(id: number): Promise<Subscription | null> {
+    return this.subscriptionRepository.findOne({ where: { id } });
+  }
+
+  async getSubscriptionByPublicId(
+    publicId: string,
+  ): Promise<Subscription | null> {
+    return this.subscriptionRepository.findOne({ where: { publicId } });
+  }
+
+  async getSubscriptionsByPublicId(publicId: string): Promise<Subscription[]> {
+    // subscription.userId directly stores user publicId (UUID), no join needed
+    return this.subscriptionRepository.find({
+      where: { userId: publicId },
+      relations: ['serviceProfile', 'assignedWorker', 'assignedWorker.user'],
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async pauseSubscription(id: number): Promise<Subscription> {
+    const subscription = await this.getSubscriptionById(id);
+    if (!subscription) {
+      throw new Error('Subscription not found');
+    }
+
+    subscription.status = SubscriptionStatus.PAUSED;
+    return this.subscriptionRepository.save(subscription);
+  }
+
+  async resumeSubscription(id: number): Promise<Subscription> {
+    const subscription = await this.getSubscriptionById(id);
+    if (!subscription) {
+      throw new Error('Subscription not found');
+    }
+
+    subscription.status = SubscriptionStatus.ACTIVE;
+    return this.subscriptionRepository.save(subscription);
+  }
+
+  async cancelSubscription(id: number): Promise<Subscription> {
+    const subscription = await this.getSubscriptionById(id);
+    if (!subscription) {
+      throw new Error('Subscription not found');
+    }
+
+    subscription.status = SubscriptionStatus.CANCELLED;
+    subscription.endDate = new Date();
+    return this.subscriptionRepository.save(subscription);
+  }
+
+  async getActiveSubscriptions(): Promise<Subscription[]> {
+    return this.subscriptionRepository.find({
+      where: {
+        status: SubscriptionStatus.ACTIVE,
+      },
+    });
+  }
+
+  async updateSubscription(
+    id: number,
+    updates: Partial<Subscription>,
+  ): Promise<Subscription> {
+    const subscription = await this.getSubscriptionById(id);
+    if (!subscription) {
+      throw new Error('Subscription not found');
+    }
+
+    Object.assign(subscription, updates);
+    return this.subscriptionRepository.save(subscription);
+  }
+
+  async getSubscriptionsByStatus(
+    status: SubscriptionStatus,
+  ): Promise<Subscription[]> {
+    return this.subscriptionRepository.find({ where: { status } });
+  }
+
+  /**
+   * Sync worker assignment from a booking to the parent subscription
+   * Updates the subscription's assignedWorkerId and related fields
+   */
+  async assignWorkerToSubscription(
+    subscriptionId: number,
+    workerId: number,
+  ): Promise<Subscription> {
+    // Delegate to the sync service to avoid circular dependency with BookingsService
+    await this.subscriptionWorkerSyncService.syncWorkerToSubscription(subscriptionId, workerId);
+    
+    // Fetch and return the updated subscription
+    const subscription = await this.getSubscriptionById(subscriptionId);
+    if (!subscription) {
+      throw new Error('Subscription not found');
+    }
+    
+    return subscription;
+  }
+
+  private getMealPlanTimeWindows(customPlanData: any, preferredTimeWindow: string): { startTime: string; endTime: string; noteSuffix: string }[] {
+    const customData = typeof customPlanData === 'string'
+      ? JSON.parse(customPlanData)
+      : customPlanData;
+
+    const isCooking =
+      customData?.serviceType?.toLowerCase() === 'cooking' ||
+      customData?.category?.toLowerCase() === 'cooking';
+
+    const mealPlan = customData?.mealPlan || null;
+
+    if (isCooking && mealPlan) {
+      const mealPlanStr = String(mealPlan).toUpperCase();
+      
+      if (mealPlanStr === 'BF' || mealPlanStr === 'LUNCH' || mealPlanStr === 'BF_LUNCH') {
+        return [{ startTime: '06:00:00', endTime: '12:00:00', noteSuffix: 'Breakfast/Lunch shift (6 AM - 12 PM)' }];
+      }
+      
+      if (mealPlanStr === 'DINNER') {
+        return [{ startTime: '16:00:00', endTime: '21:00:00', noteSuffix: 'Dinner shift (4 PM - 9 PM)' }];
+      }
+      
+      if (mealPlanStr === 'LUNCH_DINNER' || mealPlanStr === 'FULL_DAY') {
+        return [
+          { startTime: '06:00:00', endTime: '12:00:00', noteSuffix: 'Breakfast/Lunch shift (6 AM - 12 PM)' },
+          { startTime: '16:00:00', endTime: '21:00:00', noteSuffix: 'Dinner shift (4 PM - 9 PM)' }
+        ];
+      }
+    }
+
+    // Default legacy mapping fallback
+    let startHour = 8;
+    let endHour = 12;
+    switch (preferredTimeWindow.toLowerCase()) {
+      case 'morning': startHour = 8; endHour = 12; break;
+      case 'afternoon': startHour = 12; endHour = 17; break;
+      case 'evening': startHour = 16; endHour = 21; break;
+      case 'early-morning': startHour = 6; endHour = 11; break;
+    }
+    return [{
+      startTime: `${startHour.toString().padStart(2, '0')}:00:00`,
+      endTime: `${endHour.toString().padStart(2, '0')}:00:00`,
+      noteSuffix: ''
+    }];
+  }
+}

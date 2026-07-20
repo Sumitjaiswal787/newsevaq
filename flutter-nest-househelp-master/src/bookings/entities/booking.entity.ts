@@ -1,0 +1,256 @@
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  ManyToOne,
+  JoinColumn,
+  OneToOne,
+  VersionColumn,
+  BeforeInsert,
+} from 'typeorm';
+import { Expose, Type } from 'class-transformer';
+import * as crypto from 'crypto';
+import { IsOptional, IsNumber, IsString } from 'class-validator';
+import { User } from '../../users/entities/user.entity';
+import { Worker } from '../../workers/entities/worker.entity';
+import { Service } from '../../services/entities/service.entity';
+import { Slot } from '../../slots/entities/slot.entity';
+import { Payment } from '../../payments/entities/payment.entity';
+import { ServiceRequest } from '../../service-requests/entities/service-request.entity';
+import { Subscription } from '../../subscriptions/entities/subscription.entity';
+
+export class LocationData {
+  @Expose()
+  @IsNumber()
+  lat: number;
+
+  @Expose()
+  @IsNumber()
+  lng: number;
+
+  @Expose()
+  @IsNumber()
+  latitude: number;
+
+  @Expose()
+  @IsNumber()
+  longitude: number;
+
+  @Expose()
+  @IsOptional()
+  @IsString()
+  address: string;
+
+  constructor() {}
+}
+
+export enum BookingStatus {
+  REQUESTED = 'requested',
+  PENDING = 'pending',
+  CONFIRMED = 'confirmed',
+  IN_PROGRESS = 'in_progress',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+  NO_SHOW = 'no_show',
+}
+
+export enum BookingType {
+  ON_DEMAND = 'on_demand',
+  SCHEDULED = 'scheduled',
+  SUBSCRIPTION = 'subscription',
+}
+
+export enum AssignmentState {
+  PENDING = 'pending',
+  ASSIGNED = 'assigned',
+  CONFIRMED = 'confirmed',
+  REASSIGNING = 'reassigning',
+  CANCELLED = 'cancelled',
+  PROVISIONAL_ASSIGNED = 'provisional_assigned',
+  PROVISIONAL_EXPIRED = 'provisional_expired',
+}
+
+@Entity('booking')
+export class Booking {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column('uuid', { unique: true, nullable: false })
+  publicId: string; // Public-facing UUID identifier
+
+  @BeforeInsert()
+  generatePublicId() {
+    if (!this.publicId) {
+      this.publicId = crypto.randomUUID();
+    }
+  }
+
+  @Column({ name: 'userId', type: 'uuid' })
+  userId: string;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'userId', referencedColumnName: 'publicId' })
+  user: User;
+
+  @ManyToOne(() => Worker, { nullable: true })
+  @JoinColumn({ name: 'workerId' })
+  worker: Worker;
+
+  @Column({ type: 'int', nullable: true, name: 'workerId' })
+  workerId: number;
+
+  @ManyToOne(() => Worker, { nullable: true })
+  @JoinColumn({ name: 'assignedWorkerId' })
+  assignedWorker: Worker;
+
+  @Column({ type: 'int', nullable: true, name: 'assignedWorkerId' })
+  assignedWorkerId: number;
+
+  @Column({ name: 'serviceId', type: 'int', nullable: true })
+  serviceId: number;
+
+  @Column({ type: 'boolean', default: false })
+  preServiceReminderSent: boolean;
+
+  @ManyToOne(() => Service, { nullable: true })
+  @JoinColumn({ name: 'serviceId' })
+  service: Service;
+
+  @Column({ name: 'slotId', type: 'int', nullable: true })
+  slotId: number;
+
+  @ManyToOne(() => Slot, { nullable: true })
+  @JoinColumn({ name: 'slotId' })
+  slot: Slot;
+
+  @Column({ type: 'date', nullable: true })
+  date: string;
+
+  @Column({ type: 'time' })
+  startTime: string;
+
+  @Column({ type: 'time' })
+  endTime: string;
+
+  @Column({
+    name: 'amount',
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 0,
+  })
+  amount: number;
+
+  @Column({
+    name: 'totalAmount',
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 0,
+  })
+  totalAmount: number;
+
+  @Column({ type: 'text', default: BookingStatus.PENDING })
+  status: BookingStatus;
+
+  @Column({ type: 'text', default: BookingType.ON_DEMAND })
+  type: BookingType;
+
+  @Column({ type: 'text', nullable: true })
+  notes: string;
+
+  @Column({ name: 'serviceRequestId', type: 'uuid', nullable: true })
+  serviceRequestId: string;
+
+  @Column({ type: 'json', nullable: true })
+  @Type(() => LocationData)
+  location: LocationData;
+
+  @Column({ default: false })
+  responsibilityTransferred: boolean;
+
+  @Column({ default: false })
+  systemMonitoring: boolean;
+
+  @Column({ type: 'text', nullable: true })
+  protectionStatus: string;
+
+  @Column({ type: 'text', default: AssignmentState.PENDING })
+  assignmentState: AssignmentState;
+
+  @Column({ default: false })
+  isPaid: boolean;
+
+  @Column({ type: 'text', nullable: true })
+  assignmentReason: string;
+
+  @Column({ type: 'integer', default: 0 })
+  reassignmentCount: number;
+
+  @Column({ type: 'timestamp', nullable: true })
+  assignmentTimestamp: Date;
+
+  @Column({ type: 'timestamp', nullable: true })
+  startedAt: Date;
+
+  @Column({ default: false })
+  notificationSent: boolean;
+
+  @Column({ type: 'text', nullable: true, name: 'guest_fcm_token' })
+  guestFcmToken: string;
+
+  @Column({ type: 'text', nullable: true })
+  assignmentMetadata: string;
+
+  // TEMPORARY DISABLED - this column was never created in production database causing critical failures
+  // @Column({ type: 'json', nullable: true })
+  // metadata: any;
+
+  @OneToOne(() => Payment, (payment) => payment.booking)
+  payment: Payment;
+
+  @ManyToOne(() => ServiceRequest, { nullable: true })
+  @JoinColumn({ name: 'serviceRequestId' })
+  serviceRequest: ServiceRequest;
+
+  @Column({ type: 'int', nullable: true })
+  subscriptionId: number;
+
+  @Expose()
+  @ManyToOne(() => Subscription, { nullable: true })
+  @JoinColumn({ name: 'subscriptionId' })
+  subscription: Subscription;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
+
+  @VersionColumn()
+  version: number;
+
+  @Column({ type: 'text', nullable: true })
+  otp: string;
+
+  @Column({ default: false })
+  isOtpVerified: boolean;
+
+  @Column({ type: 'text', nullable: true })
+  completionOtp: string;
+
+  @Column({ default: false })
+  isCompletionOtpVerified: boolean;
+
+  @Expose()
+  get isOtpRequired(): boolean {
+    return !!this.otp && !this.isOtpVerified;
+  }
+
+  @Expose()
+  get isCompletionOtpRequired(): boolean {
+    return !!this.completionOtp && !this.isCompletionOtpVerified;
+  }
+}
