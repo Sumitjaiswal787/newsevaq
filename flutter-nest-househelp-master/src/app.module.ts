@@ -187,6 +187,8 @@ import { ObservabilityService } from './common/services/observability.service';
           // Only enable this locally for development, never on Railway
           // ✅ HARD LOCK: NO ENVIRONMENT VARIABLE CAN OVERRIDE THIS
           synchronize: host === '127.0.0.1' || host === 'localhost' || (process.env.NODE_ENV === 'development' && process.env.SYNCHRONIZE === 'true'),
+          migrationsRun: true,
+          migrations: [path.join(__dirname, 'database/migrations/*.js')],
           logging: ['error', 'warn'], // Reduce logging to only errors and warnings
           logger: 'advanced-console', // Use advanced console logger
           // Railway Postgres SSL configuration - required for external connections
