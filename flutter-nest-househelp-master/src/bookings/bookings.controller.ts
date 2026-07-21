@@ -33,6 +33,8 @@ export class BookingsController {
   }
 
   @Delete('admin/purge-all-bookings-public')
+  @Get('admin/purge-all-bookings-public')
+  @Post('admin/purge-all-bookings-public')
   purgeAllBookingsPublic() {
     return this.bookingsService.purgeAllBookings();
   }
