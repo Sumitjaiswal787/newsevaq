@@ -4,6 +4,11 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.9] - 2026-07-21
+
+### Added
+- **Subscription Slot Locking & Worker Scheduling Engine Rule**: Documented immutable architectural workspace rules in [AGENTS.md](file:///c:/Users/sumitjaiswal/Desktop/sevaq_new/SEVAQ-16580cb5e3e78e0c1b06bc21433871a6cc4e3cb0/.agents/AGENTS.md) for Urban Company-grade shift reservations (Morning/Evening), 7-tier worker ranking, route distance optimization, and race condition protection.
+
 ## [1.0.8] - 2026-07-21
 
 ### Added
