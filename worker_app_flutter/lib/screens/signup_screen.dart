@@ -108,16 +108,11 @@ class _WorkerSignupScreenState extends State<WorkerSignupScreen> {
         },
         onVerificationFailed: (exception) {
           debugPrint('Verification failed: ${exception.message}');
-          // Enable dev mode anyway for testing
-          setState(() {
-            _otpSent = true;
-            _verificationId = 'dev_verification';
-            _isLoading = false;
-          });
+          setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
                 content: Text(
-                    'Firebase error: ${exception.message}. Using dev mode.')),
+                    'Firebase error: ${exception.message ?? "Verification failed"}')),
           );
         },
         onCodeAutoRetrievalTimeout: (verificationId) {
@@ -125,15 +120,10 @@ class _WorkerSignupScreenState extends State<WorkerSignupScreen> {
         },
       );
     } catch (e) {
-      // Enable dev mode on any error
       debugPrint('Error sending OTP: $e');
-      setState(() {
-        _otpSent = true;
-        _verificationId = 'dev_verification';
-        _isLoading = false;
-      });
+      setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('OTP service unavailable. Using dev mode.')),
+        SnackBar(content: Text('Failed to send OTP: $e')),
       );
     }
   }

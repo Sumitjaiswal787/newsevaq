@@ -90,15 +90,11 @@ class _WorkerLoginScreenState extends State<WorkerLoginScreen> {
         },
         onVerificationFailed: (exception) {
           debugPrint('Verification failed: ${exception.message}');
-          // In development mode, allow bypass even if OTP fails
-          setState(() {
-            _otpSent = true; // Enable the OTP input anyway
-            _isLoading = false;
-          });
+          setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
                 content: Text(
-                    'Firebase error: ${exception.message}. You can still test with dev mode.')),
+                    'Firebase OTP error: ${exception.message ?? "Verification failed"}')),
           );
         },
         onCodeAutoRetrievalTimeout: (verificationId) {
@@ -107,13 +103,9 @@ class _WorkerLoginScreenState extends State<WorkerLoginScreen> {
       );
     } catch (e) {
       debugPrint('Error sending OTP: $e');
-      // In case of any error, enable dev mode
-      setState(() {
-        _otpSent = true;
-        _isLoading = false;
-      });
+      setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('OTP service unavailable. Using dev mode.')),
+        SnackBar(content: Text('Failed to send OTP: $e')),
       );
     }
   }
@@ -150,18 +142,22 @@ class _WorkerLoginScreenState extends State<WorkerLoginScreen> {
 
       // Get Firebase ID token
       idToken = await userCredential.user?.getIdToken();
+      if (idToken == null) {
+        throw Exception('Failed to retrieve authentication token from Firebase.');
+      }
     } catch (e) {
-      // Firebase auth failed - this is expected in dev without proper SHA config
-      debugPrint('Firebase OTP failed (expected in dev): $e');
-      // We'll use dev bypass token instead
-      idToken =
-          'dev_test_token'; // Backend expects 'dev_test_token', not 'dev_bypass'
+      debugPrint('Firebase OTP verification failed: $e');
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Invalid OTP. Please check the code and try again.')),
+        );
+      }
+      return;
     }
 
     // Now call the backend to verify and login
-    // The auth provider will use dev_test_token if idToken is 'dev_test_token'
-    final success = await authProvider.verifyOtpWithToken(
-        phone, idToken ?? 'dev_test_token');
+    final success = await authProvider.verifyOtpWithToken(phone, idToken);
 
     if (success && mounted) {
       Navigator.of(context).pushReplacement(

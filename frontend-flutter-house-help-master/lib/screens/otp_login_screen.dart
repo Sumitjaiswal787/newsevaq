@@ -164,13 +164,6 @@ class _OtpLoginScreenState extends State<OtpLoginScreen>
     if (!mounted) return;
     setState(() { _isSendingOTP = true; _errorMessage = ''; });
 
-    if (kDebugMode) {
-      debugPrint('OTP Login: Skipping actual Firebase SMS in debug mode.');
-      setState(() { _verificationId = 'dev_verification_id'; _isSendingOTP = false; });
-      _startCountdown();
-      return;
-    }
-
     try {
       await FirebaseAuthService.verifyPhoneNumber(
         phoneNumber: widget.phoneNumber,
@@ -213,13 +206,6 @@ class _OtpLoginScreenState extends State<OtpLoginScreen>
     }
 
     setState(() { _isLoading = true; _errorMessage = ''; });
-
-    // Dev bypass
-    if (otp == '123456' || otp == '999999') {
-      debugPrint('OTP Login: Bypassing Firebase with dev token');
-      await _handleVerificationSuccess('dev_test_token');
-      return;
-    }
 
     if (_verificationId == null) {
       setState(() {
