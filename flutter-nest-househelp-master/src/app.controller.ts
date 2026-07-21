@@ -22,26 +22,35 @@ export class AppController {
   @Post('purge-all-bookings-now')
   @Delete('purge-all-bookings-now')
   async purgeAllBookingsNow() {
-    return await this.dataSource.transaction(async (manager) => {
-      let count = 0;
+    const logs: string[] = [];
+    try {
+      await this.dataSource.query('DELETE FROM bookings');
+      logs.push('✅ Deleted bookings');
+    } catch (e: any) {
       try {
-        const countRes = await manager.query('SELECT COUNT(*) FROM bookings');
-        count = parseInt(countRes[0]?.count || '0', 10);
-      } catch (e) {}
+        await this.dataSource.query('TRUNCATE TABLE bookings CASCADE');
+        logs.push('✅ Truncated bookings CASCADE');
+      } catch (err: any) {
+        logs.push(`❌ Delete bookings failed: ${err.message}`);
+      }
+    }
 
-      // Truncate bookings table and any referencing tables via CASCADE
-      await manager.query('TRUNCATE TABLE bookings CASCADE');
-      await manager.query('UPDATE slots SET "isBooked" = false, "currentBookings" = 0');
-      try { await manager.query('TRUNCATE TABLE subscription_locks CASCADE'); } catch (e) {}
-      try { await manager.query('TRUNCATE TABLE worker_temporary_locks CASCADE'); } catch (e) {}
-      try { await manager.query('TRUNCATE TABLE subscriptions CASCADE'); } catch (e) {}
+    try {
+      await this.dataSource.query('UPDATE slots SET "isBooked" = false, "currentBookings" = 0');
+      logs.push('✅ Reset slots availability');
+    } catch (e: any) {
+      logs.push(`❌ Reset slots failed: ${e.message}`);
+    }
 
-      return {
-        success: true,
-        message: 'Successfully purged all bookings and related data from production database.',
-        purgedBookingsCount: count,
-      };
-    });
+    try { await this.dataSource.query('DELETE FROM subscription_locks'); logs.push('✅ Cleaned subscription_locks'); } catch (e: any) {}
+    try { await this.dataSource.query('DELETE FROM worker_temporary_locks'); logs.push('✅ Cleaned worker_temporary_locks'); } catch (e: any) {}
+    try { await this.dataSource.query('DELETE FROM subscriptions'); logs.push('✅ Cleaned subscriptions'); } catch (e: any) {}
+
+    return {
+      success: true,
+      message: 'Purge operation completed on production database.',
+      details: logs,
+    };
   }
 
   @Get()
