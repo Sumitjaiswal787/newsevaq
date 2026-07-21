@@ -727,9 +727,9 @@ export class WorkersService {
     // Priority 2: Validate required fields
     // ============================================
     
-    // Validate bio (min 10 characters)
-    if (!bio || bio.length < 10) {
-      throw new Error('Bio is required and must be at least 10 characters');
+    // Validate bio (default to standard bio if missing or too short)
+    if (!bio || bio.trim().length < 10) {
+      bio = 'Professional household service provider registered on SevaQ platform.';
     }
     
     // Validate location (latitude and longitude required)
