@@ -1,13 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, IsNull } from 'typeorm';
+import { Repository, In, IsNull, Not } from 'typeorm';
 import {
   Booking,
   BookingType,
   BookingStatus,
   AssignmentState,
 } from '../bookings/entities/booking.entity';
+import { BookingValidator } from '../bookings/booking-validator';
 import { User } from '../users/entities/user.entity';
 import { Service } from '../services/entities/service.entity';
 import { Worker } from '../workers/entities/worker.entity';
@@ -240,7 +241,8 @@ export class OnDemandAssignmentScheduler {
         const bookingsToAssign = await this.bookingRepository.find({
           where: {
             type: In([BookingType.ON_DEMAND, BookingType.SUBSCRIPTION]),
-            status: In([BookingStatus.REQUESTED, BookingStatus.CONFIRMED]),
+            status: In([BookingStatus.REQUESTED, BookingStatus.CONFIRMED, BookingStatus.PENDING]),
+            assignmentState: Not(In([AssignmentState.WAITING_FOR_LOCATION, AssignmentState.ASSIGNED])),
             workerId: IsNull(),
           },
           relations: ['service', 'user'],
@@ -442,30 +444,25 @@ export class OnDemandAssignmentScheduler {
         }
       }
 
-      if (!user) {
-        this.logger.error(`User ${booking.userId} not found for booking ${booking.id}`);
-        return { success: false, reason: 'User not found' };
+      // 1. Run Booking & Location Validation
+      const validation = BookingValidator.validateForAssignment(booking, user);
+      if (!validation.isValid) {
+        booking.status = BookingStatus.WAITING_FOR_LOCATION;
+        booking.assignmentState = AssignmentState.WAITING_FOR_LOCATION;
+        booking.assignmentReason = validation.reason || 'CUSTOMER_LOCATION_MISSING';
+        await this.bookingRepository.save(booking);
+
+        return {
+          success: false,
+          reason: validation.reason || 'CUSTOMER_LOCATION_MISSING',
+        };
       }
 
-      // Get user's location - prefer preferred location
-      let userLat: number;
-      let userLng: number;
-
-      if (user.preferredLat && user.preferredLng) {
-        userLat = parseFloat(user.preferredLat as unknown as string);
-        userLng = parseFloat(user.preferredLng as unknown as string);
-      } else if (user.latitude && user.longitude) {
-        userLat = parseFloat(user.latitude as unknown as string);
-        userLng = parseFloat(user.longitude as unknown as string);
-      } else {
-        this.logger.warn(
-          `No location found for user ${booking.userId} - cannot assign worker`,
-        );
-        return { success: false, reason: 'No user location available' };
-      }
+      const userLat = validation.userLat!;
+      const userLng = validation.userLng!;
 
       this.logger.log(
-        `Assigning worker for on-demand booking ${booking.id} at location: lat=${userLat}, lng=${userLng}`,
+        `Assigning worker for on-demand booking ${booking.id} at validated location: lat=${userLat}, lng=${userLng}`,
       );
 
       // Find workers for the service

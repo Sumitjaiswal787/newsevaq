@@ -643,9 +643,44 @@ export class BookingsService implements OnApplicationBootstrap {
         generatedOtp = Math.floor(1000 + Math.random() * 9000).toString();
       }
 
+      // Snapshot customer location onto booking
+      let resolvedLocation = createBookingDto.location;
+      const bookingUser = await this.usersRepository.findOne({
+        where: { publicId: createBookingDto.userId },
+      });
+
+      if (!resolvedLocation && bookingUser) {
+        const lat = bookingUser.preferredLat || bookingUser.latitude;
+        const lng = bookingUser.preferredLng || bookingUser.longitude;
+        if (lat && lng) {
+          resolvedLocation = {
+            latitude: parseFloat(lat as any),
+            longitude: parseFloat(lng as any),
+            lat: parseFloat(lat as any),
+            lng: parseFloat(lng as any),
+            address: bookingUser.address || '',
+          };
+        }
+      }
+
+      const hasValidLocation =
+        (resolvedLocation?.latitude && resolvedLocation?.longitude) ||
+        (resolvedLocation?.lat && resolvedLocation?.lng);
+
+      const initialStatus = hasValidLocation
+        ? BookingStatus.REQUESTED
+        : BookingStatus.WAITING_FOR_LOCATION;
+
+      const initialAssignmentState = hasValidLocation
+        ? (createBookingDto.serviceRequestId || createBookingDto.workerId
+            ? AssignmentState.ASSIGNED
+            : AssignmentState.PENDING)
+        : AssignmentState.WAITING_FOR_LOCATION;
+
       const bookingData = {
         ...createBookingDto,
-        status: BookingStatus.REQUESTED,
+        location: resolvedLocation,
+        status: initialStatus,
         worker: workerToAssign,
         assignedWorkerId: createBookingDto.workerId,
         type: bookingType,
@@ -653,10 +688,8 @@ export class BookingsService implements OnApplicationBootstrap {
         totalAmount: amount, // Set totalAmount to the same as amount
         otp: generatedOtp,
         isOtpVerified: false,
-        assignmentState:
-          createBookingDto.serviceRequestId || createBookingDto.workerId
-            ? AssignmentState.ASSIGNED
-            : AssignmentState.PENDING,
+        assignmentState: initialAssignmentState,
+        assignmentReason: hasValidLocation ? undefined : 'CUSTOMER_LOCATION_MISSING',
         // Parse to time string for PostgreSQL time type
         startTime: parseTimeForStorage(createBookingDto.startTime),
         endTime: parseTimeForStorage(createBookingDto.endTime),

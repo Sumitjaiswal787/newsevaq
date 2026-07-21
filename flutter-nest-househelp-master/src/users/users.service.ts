@@ -155,7 +155,27 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
     // Update using the numeric id
-    return this.usersRepository.update(user.id, updateUserDto);
+    const result = await this.usersRepository.update(user.id, updateUserDto);
+
+    // If location fields updated, reactivate any WAITING_FOR_LOCATION bookings for this user
+    if (
+      updateUserDto.latitude ||
+      updateUserDto.longitude ||
+      (updateUserDto as any).preferredLat ||
+      (updateUserDto as any).preferredLng ||
+      updateUserDto.address
+    ) {
+      try {
+        await this.dataSource.query(
+          `UPDATE booking SET status = 'confirmed', "assignmentState" = 'pending', "assignmentReason" = 'LOCATION_UPDATED_BY_USER' WHERE "userId" = $1 AND status = 'waiting_for_location'`,
+          [publicId],
+        );
+      } catch (e) {
+        // Silently ignore if table or booking not found
+      }
+    }
+
+    return result;
   }
 
   async updateFcmToken(userId: number | string, fcmToken: string): Promise<void> {

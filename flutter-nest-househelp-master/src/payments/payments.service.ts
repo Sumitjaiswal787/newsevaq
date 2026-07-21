@@ -434,15 +434,43 @@ export class PaymentsService {
           }
           if (bookingData.notes) validBookingData.notes = bookingData.notes;
           if (bookingData.type) validBookingData.type = bookingData.type;
-          if (bookingData.metadata)
+          if (bookingData.metadata) {
             validBookingData.metadata = bookingData.metadata;
-          if (bookingData.location)
+          }
+          if (bookingData.location) {
             validBookingData.location = bookingData.location;
-          // Save FCM token to booking for notification delivery
+          }
           if (bookingData.fcmToken) {
             validBookingData.guestFcmToken = bookingData.fcmToken;
             this.logger.log(`Saved FCM token to booking data for notification delivery`);
           }
+        }
+
+        // Ensure location is snapshotted onto booking data if missing
+        if (!validBookingData.location && validBookingData.userId) {
+          try {
+            const userRepo = queryRunner.manager.getRepository('User');
+            const user = await userRepo.findOne({
+              where: [
+                { publicId: validBookingData.userId },
+                { email: validBookingData.userId },
+              ],
+            });
+
+            if (user) {
+              const lat = user.preferredLat || user.latitude;
+              const lng = user.preferredLng || user.longitude;
+              if (lat && lng) {
+                validBookingData.location = {
+                  latitude: parseFloat(lat as any),
+                  longitude: parseFloat(lng as any),
+                  lat: parseFloat(lat as any),
+                  lng: parseFloat(lng as any),
+                  address: user.address || '',
+                };
+              }
+            }
+          } catch (e) {}
         }
         
         // Generate OTP if not a subscription (default on_demand)

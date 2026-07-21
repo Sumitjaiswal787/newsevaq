@@ -54,6 +54,7 @@ export enum BookingStatus {
   COMPLETED = 'completed',
   CANCELLED = 'cancelled',
   NO_SHOW = 'no_show',
+  WAITING_FOR_LOCATION = 'waiting_for_location',
 }
 
 export enum BookingType {
@@ -70,6 +71,7 @@ export enum AssignmentState {
   CANCELLED = 'cancelled',
   PROVISIONAL_ASSIGNED = 'provisional_assigned',
   PROVISIONAL_EXPIRED = 'provisional_expired',
+  WAITING_FOR_LOCATION = 'waiting_for_location',
 }
 
 @Entity('booking')

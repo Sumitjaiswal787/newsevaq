@@ -386,7 +386,7 @@ class AppTheme {
         // Focus ring for accessibility
         focusColor: primaryColor.withOpacity(0.25),
       ),
-      cardTheme: CardThemeData(
+      cardTheme: CardTheme(
         color: surfaceColor,
         elevation: 0,
         shape: RoundedRectangleBorder(

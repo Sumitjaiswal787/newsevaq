@@ -4,6 +4,11 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.12] - 2026-07-21
+
+### Fixed
+- **Customer Location Validation & Infinite Retry Prevention**: Fixed missing location bug in `OnDemandAssignmentScheduler`. Added `BookingValidator` class to validate location/coordinates before worker evaluation, added `WAITING_FOR_LOCATION` state to `BookingStatus` and `AssignmentState` to halt infinite 1-minute retry loops for incomplete customer profiles, and added automatic re-activation when customer updates profile address.
+
 ## [1.0.11] - 2026-07-21
 
 ### Added
