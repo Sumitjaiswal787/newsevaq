@@ -18,6 +18,8 @@ class BookingProvider extends ChangeNotifier with WidgetsBindingObserver {
   bool _isAppInBackground = false;
   bool _isWorkerAvailable = true;
 
+  final Set<String> _alertedBookingIds = {};
+
   /// Polling interval - configured for fast in-app fallback alerts
   static const Duration pollingInterval =
       Duration(seconds: 8);
@@ -207,11 +209,9 @@ class BookingProvider extends ChangeNotifier with WidgetsBindingObserver {
             .toList();
       }
 
-      // Check for new pending/requested bookings that are assigned to the worker
-      // This is more reliable than comparing counts because it alerts whenever there is a PENDING status job
-      final oldPendingIds = _bookings.where((b) => b.isPending).map((b) => b.id).toSet();
       for (var booking in newBookings) {
-        if (booking.isPending && !oldPendingIds.contains(booking.id)) {
+        if (booking.isPending && !_alertedBookingIds.contains(booking.id)) {
+          _alertedBookingIds.add(booking.id);
           debugPrint('BookingProvider: NEW PENDING BOOKING DETECTED! ID: ${booking.id}');
           // Push booking data payload to the NotificationService stream to display dialog and play sound
           NotificationService.triggerNewBookingEvent({
