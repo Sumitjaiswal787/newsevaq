@@ -27,7 +27,7 @@ class SoundService {
             usageType: AndroidUsageType.alarm,
             audioFocus: AndroidAudioFocus.gain,
           ),
-          iOS: const AudioContextIOS(
+          iOS: AudioContextIOS(
             category: AVAudioSessionCategory.playback,
           ),
         ),
