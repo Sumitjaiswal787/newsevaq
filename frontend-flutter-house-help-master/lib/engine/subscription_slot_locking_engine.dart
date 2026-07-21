@@ -6,13 +6,27 @@ import 'dart:math';
 
 enum ShiftType { morning, evening }
 
-enum SubscriptionType { breakfast, lunch, breakfastAndLunch, dinner, lunchAndDinner }
+enum SubscriptionType {
+  breakfast,
+  lunch,
+  breakfastAndLunch,
+  dinner,
+  lunchAndDinner,
+}
 
 class ShiftWindow {
   final String startTime; // "05:00"
   final String endTime;   // "12:00"
 
   const ShiftWindow({required this.startTime, required this.endTime});
+
+  int get startMinutes => _parseMinutes(startTime);
+  int get endMinutes => _parseMinutes(endTime);
+
+  static int _parseMinutes(String timeStr) {
+    final parts = timeStr.split(':');
+    return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+  }
 }
 
 class ShiftConstants {
@@ -99,14 +113,32 @@ class WorkerBreakModel {
   WorkerBreakModel({required this.startTime, required this.endTime});
 }
 
-class BookingTimeInterval {
-  final String start; // "07:00"
-  final String end;   // "08:00"
+class TimeSlotInterval {
+  final String startTime; // "07:00"
+  final int serviceDurationMinutes;
+  final int travelBufferMinutes;
+  final int cleaningBufferMinutes;
 
-  BookingTimeInterval({required this.start, required this.end});
+  TimeSlotInterval({
+    required this.startTime,
+    required this.serviceDurationMinutes,
+    this.travelBufferMinutes = 20,
+    this.cleaningBufferMinutes = 10,
+  });
 
-  int get startMinutes => _parseMinutes(start);
-  int get endMinutes => _parseMinutes(end);
+  int get startMinutes => _parseMinutes(startTime);
+
+  /// Total reserved time: service + travel + cleaning
+  int get totalReservedMinutes =>
+      serviceDurationMinutes + travelBufferMinutes + cleaningBufferMinutes;
+
+  int get endMinutes => startMinutes + totalReservedMinutes;
+
+  String get endTime {
+    final endH = (endMinutes ~/ 60).toString().padLeft(2, '0');
+    final endM = (endMinutes % 60).toString().padLeft(2, '0');
+    return '$endH:$endM';
+  }
 
   static int _parseMinutes(String timeStr) {
     final parts = timeStr.split(':');
@@ -116,8 +148,12 @@ class BookingTimeInterval {
   }
 
   /// Canonical Overlap Formula: existing.start < new.end AND existing.end > new.start
-  bool overlapsWith(BookingTimeInterval other) {
-    return startMinutes < other.endMinutes && endMinutes > other.startMinutes;
+  bool overlapsWithRaw(int otherStartMinutes, int otherEndMinutes) {
+    return startMinutes < otherEndMinutes && endMinutes > otherStartMinutes;
+  }
+
+  bool overlapsWith(TimeSlotInterval other) {
+    return overlapsWithRaw(other.startMinutes, other.endMinutes);
   }
 }
 
@@ -126,7 +162,7 @@ class BookingModel {
   final String workerId;
   final String customerId;
   final DateTime date;
-  final BookingTimeInterval interval;
+  final TimeSlotInterval interval;
   final LocationCoordinates location;
 
   BookingModel({
@@ -139,93 +175,137 @@ class BookingModel {
   });
 }
 
-class SubscriptionLockModel {
-  final String id;
-  final String subscriptionId;
-  final String workerId;
-  final DateTime date;
-  final ShiftType shiftType;
+// ============================================================================
+// 3. DYNAMIC CAPACITY ENGINE
+// ============================================================================
 
-  SubscriptionLockModel({
-    required this.id,
-    required this.subscriptionId,
-    required this.workerId,
-    required this.date,
-    required this.shiftType,
-  });
+class CapacityEngine {
+  /// Calculates maximum job capacity for a shift based on duration & buffers
+  static int calculateShiftMaxCapacity({
+    required ShiftWindow shift,
+    required int averageServiceMinutes,
+    int travelBufferMinutes = 20,
+    int cleaningBufferMinutes = 10,
+  }) {
+    final shiftLengthMinutes = shift.endMinutes - shift.startMinutes;
+    final totalJobMinutes =
+        averageServiceMinutes + travelBufferMinutes + cleaningBufferMinutes;
+    return (shiftLengthMinutes / totalJobMinutes).floor();
+  }
+
+  /// Evaluates remaining booking capacity for a worker on a target shift
+  static int calculateRemainingCapacity({
+    required WorkerModel worker,
+    required ShiftWindow shift,
+    required DateTime date,
+    required List<BookingModel> existingBookingsToday,
+    required int averageServiceMinutes,
+  }) {
+    final maxCapacity = calculateShiftMaxCapacity(
+      shift: shift,
+      averageServiceMinutes: averageServiceMinutes,
+    );
+
+    final shiftBookingsCount = existingBookingsToday.where((b) {
+      if (b.workerId != worker.id) return false;
+      return b.interval.startMinutes >= shift.startMinutes &&
+          b.interval.endMinutes <= shift.endMinutes;
+    }).length;
+
+    return max(0, maxCapacity - shiftBookingsCount);
+  }
 }
 
 // ============================================================================
-// 3. WORKER RANKING METRIC & ALGORITHM
+// 4. WORKER RANKING & ROUTE OPTIMIZATION ENGINE (8-TIER)
 // ============================================================================
 
 class RankedWorker {
   final WorkerModel worker;
   final double distanceKm;
   final double estimatedTravelMinutes;
+  final bool isTravelFeasible;
 
   RankedWorker({
     required this.worker,
     required this.distanceKm,
     required this.estimatedTravelMinutes,
+    required this.isTravelFeasible,
   });
 }
 
 class WorkerRankingEngine {
-  /// Ranks candidate workers according to Priority 1 -> Priority 7
+  /// Ranks candidate workers according to 8-Tier Priority Strategy
   static List<RankedWorker> rankWorkers({
     required List<WorkerModel> candidateWorkers,
     required LocationCoordinates customerLocation,
     required List<BookingModel> existingBookingsToday,
     required DateTime targetDate,
-    required BookingTimeInterval newInterval,
+    required TimeSlotInterval newInterval,
   }) {
     final List<RankedWorker> rankedList = [];
 
     for (final worker in candidateWorkers) {
-      // Find worker's previous booking closest before the new interval
       final workerBookings = existingBookingsToday
           .where((b) => b.workerId == worker.id)
           .toList();
 
       LocationCoordinates referenceLocation = worker.currentLocation;
+      bool isFeasible = true;
+      double travelMinutes = 0.0;
+
       if (workerBookings.isNotEmpty) {
-        // Sort by end time ascending
         workerBookings.sort((a, b) =>
             a.interval.endMinutes.compareTo(b.interval.endMinutes));
 
-        // Find the last booking ending prior to newInterval.startMinutes
         final priorBookings = workerBookings
             .where((b) => b.interval.endMinutes <= newInterval.startMinutes)
             .toList();
 
         if (priorBookings.isNotEmpty) {
-          referenceLocation = priorBookings.last.location;
+          final lastBooking = priorBookings.last;
+          referenceLocation = lastBooking.location;
+
+          final double dist = referenceLocation.distanceTo(customerLocation);
+          travelMinutes = (dist / 20.0) * 60; // 20 km/h avg urban speed
+
+          // Travel Feasibility Check: previousBookingEnd + travelTime <= newBookingStart
+          if (lastBooking.interval.endMinutes + travelMinutes >
+              newInterval.startMinutes) {
+            isFeasible = false;
+          }
         }
+      } else {
+        final double dist = referenceLocation.distanceTo(customerLocation);
+        travelMinutes = (dist / 20.0) * 60;
       }
 
-      final double dist = referenceLocation.distanceTo(customerLocation);
-      final double travelTimeMinutes = (dist / 20.0) * 60; // 20 km/h avg urban speed
+      final double distanceKm = referenceLocation.distanceTo(customerLocation);
 
       rankedList.add(RankedWorker(
         worker: worker,
-        distanceKm: dist,
-        estimatedTravelMinutes: travelTimeMinutes,
+        distanceKm: distanceKm,
+        estimatedTravelMinutes: travelMinutes,
+        isTravelFeasible: isFeasible,
       ));
     }
 
-    // Sort according to 7-tier ranking strategy
-    rankedList.sort((a, b) {
-      // Priority 4: Nearest to customer location / previous booking
+    // Filter out travel-infeasible workers
+    final feasibleWorkers =
+        rankedList.where((rw) => rw.isTravelFeasible).toList();
+
+    // 8-Tier Sorting Strategy
+    feasibleWorkers.sort((a, b) {
+      // Priority 4: Nearest to customer's location / previous booking
       final int distComp = a.distanceKm.compareTo(b.distanceKm);
       if (distComp != 0) return distComp;
 
-      // Priority 5: Least travel time
+      // Priority 5: Shortest travel time
       final int travelComp =
           a.estimatedTravelMinutes.compareTo(b.estimatedTravelMinutes);
       if (travelComp != 0) return travelComp;
 
-      // Priority 6: Least bookings today
+      // Priority 6: Least workload today
       final int bookingsComp =
           a.worker.bookingsTodayCount.compareTo(b.worker.bookingsTodayCount);
       if (bookingsComp != 0) return bookingsComp;
@@ -234,94 +314,79 @@ class WorkerRankingEngine {
       final int ratingComp = b.worker.rating.compareTo(a.worker.rating);
       if (ratingComp != 0) return ratingComp;
 
-      // Tiebreaker: Longest idle time
+      // Priority 8: Longest Idle Time
       return a.worker.lastBookingEndedAt
           .compareTo(b.worker.lastBookingEndedAt);
     });
 
-    return rankedList;
+    return feasibleWorkers;
   }
 }
 
 // ============================================================================
-// 4. SUBSCRIPTION SLOT LOCKING ENGINE
+// 5. TIME-BASED CAPACITY LOCKING ENGINE
 // ============================================================================
 
-class SubscriptionSlotLockingEngine {
-  /// Evaluates worker eligibility for a single booking interval
-  static bool isWorkerAvailableForSlot({
+class TimeBasedCapacityLockingEngine {
+  /// Evaluates worker eligibility for a precise time interval (service + travel + buffer)
+  static bool isWorkerAvailableForInterval({
     required WorkerModel worker,
     required DateTime date,
-    required BookingTimeInterval interval,
+    required TimeSlotInterval interval,
     required List<BookingModel> existingBookings,
-    required List<SubscriptionLockModel> existingLocks,
   }) {
-    // 1. Check leave
+    // 1. Check Leave
     final isOnLeave = worker.leaves.any((l) =>
         l.date.year == date.year &&
         l.date.month == date.month &&
         l.date.day == date.day);
     if (isOnLeave) return false;
 
-    // 2. Check breaks
+    // 2. Check Breaks
     for (final b in worker.breaks) {
-      final breakInterval = BookingTimeInterval(start: b.startTime, end: b.endTime);
-      if (interval.overlapsWith(breakInterval)) return false;
+      final breakPartsStart = b.startTime.split(':');
+      final breakPartsEnd = b.endTime.split(':');
+      final breakStart =
+          int.parse(breakPartsStart[0]) * 60 + int.parse(breakPartsStart[1]);
+      final breakEnd =
+          int.parse(breakPartsEnd[0]) * 60 + int.parse(breakPartsEnd[1]);
+
+      if (interval.overlapsWithRaw(breakStart, breakEnd)) return false;
     }
 
-    // 3. Check existing booking overlaps
+    // 3. Check Existing Booking Overlaps (TIME-BASED LOCKING)
     final workerBookings =
         existingBookings.where((b) => b.workerId == worker.id);
     for (final booking in workerBookings) {
       if (interval.overlapsWith(booking.interval)) return false;
     }
 
-    // 4. Check subscription locks
-    final isMorningSlot = interval.startMinutes < 12 * 60;
-    final targetShift = isMorningSlot ? ShiftType.morning : ShiftType.evening;
-
-    final hasLockConflict = existingLocks.any((lock) =>
-        lock.workerId == worker.id &&
-        lock.date.year == date.year &&
-        lock.date.month == date.month &&
-        lock.date.day == date.day &&
-        lock.shiftType == targetShift);
-
-    if (hasLockConflict) return false;
-
     return true;
   }
 
-  /// Calculates dynamic slot availability count across all time slots
+  /// Calculates dynamic slot availability count for UI rendering
   static Map<String, int> calculateRealtimeSlotAvailability({
     required List<String> uiTimeSlots,
     required int serviceDurationMinutes,
     required List<WorkerModel> allWorkers,
     required DateTime date,
     required List<BookingModel> existingBookings,
-    required List<SubscriptionLockModel> existingLocks,
   }) {
     final Map<String, int> availabilityMap = {};
 
     for (final slotStart in uiTimeSlots) {
-      final parts = slotStart.split(':');
-      final startM = int.parse(parts[0]) * 60 + int.parse(parts[1]);
-      final endM = startM + serviceDurationMinutes;
-
-      final endH = (endM ~/ 60).toString().padLeft(2, '0');
-      final endMin = (endM % 60).toString().padLeft(2, '0');
-      final slotEnd = '$endH:$endMin';
-
-      final interval = BookingTimeInterval(start: slotStart, end: slotEnd);
+      final interval = TimeSlotInterval(
+        startTime: slotStart,
+        serviceDurationMinutes: serviceDurationMinutes,
+      );
 
       int availableWorkerCount = 0;
       for (final worker in allWorkers) {
-        if (isWorkerAvailableForSlot(
+        if (isWorkerAvailableForInterval(
           worker: worker,
           date: date,
           interval: interval,
           existingBookings: existingBookings,
-          existingLocks: existingLocks,
         )) {
           availableWorkerCount++;
         }
@@ -333,37 +398,45 @@ class SubscriptionSlotLockingEngine {
     return availabilityMap;
   }
 
-  /// Executes Atomic Worker Assignment for Single & Dual Subscriptions
-  static WorkerModel? assignWorkerForSubscription({
+  /// Assigns single worker for single or dual subscriptions (Breakfast + Lunch / Lunch + Dinner)
+  static WorkerModel? assignWorker({
     required SubscriptionType subscriptionType,
     required DateTime date,
-    required BookingTimeInterval morningInterval,
-    required BookingTimeInterval? eveningInterval,
+    required TimeSlotInterval morningInterval,
+    required TimeSlotInterval? eveningInterval,
     required LocationCoordinates customerLocation,
     required List<WorkerModel> allWorkers,
     required List<BookingModel> existingBookings,
-    required List<SubscriptionLockModel> existingLocks,
   }) {
-    if (subscriptionType == SubscriptionType.lunchAndDinner) {
-      if (eveningInterval == null) return null;
+    final isDualSubscription =
+        subscriptionType == SubscriptionType.breakfastAndLunch ||
+            subscriptionType == SubscriptionType.lunchAndDinner;
 
-      // Must find ONE single worker available for BOTH Morning & Evening slots
+    if (isDualSubscription) {
+      if (eveningInterval == null &&
+          subscriptionType == SubscriptionType.lunchAndDinner) {
+        return null;
+      }
+
+      final secondInterval = eveningInterval ?? morningInterval;
+
+      // Filter workers available for BOTH booking windows
       final candidateWorkers = allWorkers.where((worker) {
-        final availableMorning = isWorkerAvailableForSlot(
+        final morningAvailable = isWorkerAvailableForInterval(
           worker: worker,
           date: date,
           interval: morningInterval,
           existingBookings: existingBookings,
-          existingLocks: existingLocks,
         );
-        final availableEvening = isWorkerAvailableForSlot(
+
+        final secondAvailable = isWorkerAvailableForInterval(
           worker: worker,
           date: date,
-          interval: eveningInterval,
+          interval: secondInterval,
           existingBookings: existingBookings,
-          existingLocks: existingLocks,
         );
-        return availableMorning && availableEvening;
+
+        return morningAvailable && secondAvailable;
       }).toList();
 
       if (candidateWorkers.isEmpty) {
@@ -379,16 +452,15 @@ class SubscriptionSlotLockingEngine {
         newInterval: morningInterval,
       );
 
-      return ranked.first.worker;
+      return ranked.isEmpty ? null : ranked.first.worker;
     } else {
-      // Single shift or Breakfast + Lunch (Same morning shift)
+      // Single Booking (Breakfast / Lunch / Dinner)
       final candidateWorkers = allWorkers.where((worker) {
-        return isWorkerAvailableForSlot(
+        return isWorkerAvailableForInterval(
           worker: worker,
           date: date,
           interval: morningInterval,
           existingBookings: existingBookings,
-          existingLocks: existingLocks,
         );
       }).toList();
 
@@ -402,7 +474,7 @@ class SubscriptionSlotLockingEngine {
         newInterval: morningInterval,
       );
 
-      return ranked.first.worker;
+      return ranked.isEmpty ? null : ranked.first.worker;
     }
   }
 }

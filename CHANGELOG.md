@@ -4,6 +4,11 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.10] - 2026-07-21
+
+### Changed
+- **Time-Based Capacity Locking Refactoring**: Replaced full-shift locking with granular time-based capacity locking (`serviceDuration + travelBuffer + cleaningBuffer`). Workers remain available for remaining shift slots. Updated 8-tier ranking engine with Travel Feasibility checks.
+
 ## [1.0.9] - 2026-07-21
 
 ### Added

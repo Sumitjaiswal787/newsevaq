@@ -18,28 +18,33 @@
 - When calling payment verification or confirmation endpoints for custom subscriptions (where `serviceProfileId` is `null` or `0`), ensure `customPrice` is included in the request body to prevent database schema validation failures.
 - Always use `adb reverse tcp:3000 tcp:3000` to forward port 3000 when running/testing on physical Android devices over USB debugging.
 
-## 4. Subscription Slot Locking & Worker Scheduling Engine
+## 4. Time-Based Capacity Locking & Worker Scheduling Engine
 - **Shift Definitions**:
   - Morning Shift: `05:00 AM - 12:00 PM`
   - Evening Shift: `04:00 PM - 09:00 PM`
+- **Time-Based Capacity Locking (No Full-Shift Blocking)**:
+  - Workers are reserved **ONLY** for: `serviceDuration + travelBuffer + cleaningBuffer`.
+  - Immediately after `bookingStart + serviceDuration + travelBuffer + cleaningBuffer`, the worker becomes available again for remaining shift bookings.
 - **Subscription Types & Worker Consistency**:
-  - `Breakfast`: Booking window `05:00 AM - 10:00 AM`. Reserve one worker for Morning shift.
-  - `Lunch`: Booking window `10:00 AM - 12:00 PM`. Reserve one worker for Morning shift.
-  - `Breakfast + Lunch`: Allowed window `05:00 AM - 12:00 PM`. Reserve entire Morning commitment. Same worker MUST complete both services.
-  - `Dinner`: Booking window `04:00 PM - 09:00 PM`. Reserve one worker for Evening shift.
-  - `Lunch + Dinner`: Requires 1 Morning booking AND 1 Evening booking. The SAME worker MUST be assigned for both. Do NOT split bookings; if no single worker can perform both, return "No Worker Available".
-- **Slot Locking & Overlap Validation**:
-  - Shift locking occurs immediately upon subscription confirmation.
-  - Overlap formula: `existing.start < new.end AND existing.end > new.start`.
-- **7-Tier Worker Ranking Priority Order**:
-  1. Available (No leave, break, or schedule lock)
-  2. No time overlap
-  3. No subscription shift conflict
-  4. Nearest location (measured from previous booking end location to current customer location via Haversine / Maps)
-  5. Lowest travel time
-  6. Least bookings today (workload balancing)
-  7. Highest rating / longest idle time
-- **Slot Disabling & Double-Check**:
-  - Dynamically count available candidate workers per UI slot. Disable and grey out UI slots with 0 candidate workers.
-  - Perform double-check before final confirmation to prevent race conditions.
+  - `Breakfast`: Window `05:00 AM - 10:00 AM`. Lock precise booking window + buffers.
+  - `Lunch`: Window `10:00 AM - 12:00 PM`. Lock precise booking window + buffers.
+  - `Breakfast + Lunch`: Creates 2 bookings (Morning window). **SAME worker MUST be assigned for both**. Worker remains available between bookings for nearby jobs.
+  - `Dinner`: Window `04:00 PM - 09:00 PM`. Lock precise booking window + buffers.
+  - `Lunch + Dinner`: Requires 1 Morning & 1 Evening booking. **SAME worker MUST be assigned for both**. If no single worker satisfies both, return "No Worker Available" (Never split).
+- **Travel Feasibility & Overlap Rules**:
+  - Canonical Overlap Formula: `existing.start < new.end AND existing.end > new.start`.
+  - Travel Feasibility: Verify `previousBookingEnd + travelTime <= newBookingStart`.
+- **8-Tier Worker Ranking Priority Order**:
+  1. Available Worker (No leave, break, or schedule lock)
+  2. No Time Overlap
+  3. Travel Feasible
+  4. Nearest Previous Booking Location (Haversine / Route distance)
+  5. Shortest Travel Time
+  6. Least Workload Today (Dynamic capacity balance)
+  7. Highest Rating
+  8. Longest Idle Time
+- **Dynamic Slot Disabling & Pre-Confirmation Check**:
+  - Calculate real-time candidate count per slot. Grey out and disable slots with 0 candidate workers.
+  - Execute atomic pre-confirmation validation right before final checkout to prevent race conditions.
+
 
