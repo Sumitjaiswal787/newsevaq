@@ -47,4 +47,25 @@
   - Calculate real-time candidate count per slot. Grey out and disable slots with 0 candidate workers.
   - Execute atomic pre-confirmation validation right before final checkout to prevent race conditions.
 
+## 5. Temporary Worker Soft-Locking System (Race Condition Protection)
+- **Soft Reservation Before Payment**:
+  - Immediately upon slot selection and worker assignment, create a `WorkerTemporaryLock` record.
+  - Default Lock TTL: **90 Seconds** (Configurable: 30, 60, 90, 120, 180s).
+  - The locked worker is immediately removed from available pools for all other customers.
+- **Lock Lifecycle & Transitions**:
+  - `ACTIVE` $\rightarrow$ `CONFIRMED` (Payment Success: convert lock to confirmed booking, delete lock).
+  - `ACTIVE` $\rightarrow$ `EXPIRED` / `CANCELLED` (Payment Failure / Timeout / App Close: release lock immediately).
+- **8-Level Availability Hierarchy**:
+  1. Confirmed Bookings
+  2. Active Temporary Locks (`lockStatus = ACTIVE` AND `now < expiresAt`)
+  3. Subscription Reservations
+  4. Worker Leaves
+  5. Worker Breaks
+  6. Shift Definitions
+  7. Travel Feasibility
+  8. Route Optimization
+- **Atomic Pre-Confirmation Validation**:
+  - Inside a single database transaction, re-verify lock status is `ACTIVE` and worker remains unbooked before finalizing checkout. If another customer acquired the lock/booking, throw `"This slot has just become unavailable."`
+
+
 

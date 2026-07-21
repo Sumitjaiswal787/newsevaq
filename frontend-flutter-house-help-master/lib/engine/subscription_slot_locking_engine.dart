@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 // ============================================================================
@@ -13,6 +14,8 @@ enum SubscriptionType {
   dinner,
   lunchAndDinner,
 }
+
+enum LockStatus { active, expired, confirmed, cancelled }
 
 class ShiftWindow {
   final String startTime; // "05:00"
@@ -89,8 +92,8 @@ class WorkerModel {
 
 class WorkerShiftModel {
   final ShiftType shiftType;
-  final String startTime; // "05:00"
-  final String endTime;   // "12:00"
+  final String startTime;
+  final String endTime;
 
   WorkerShiftModel({
     required this.shiftType,
@@ -107,14 +110,14 @@ class WorkerLeaveModel {
 }
 
 class WorkerBreakModel {
-  final String startTime; // "08:00"
-  final String endTime;   // "08:30"
+  final String startTime;
+  final String endTime;
 
   WorkerBreakModel({required this.startTime, required this.endTime});
 }
 
 class TimeSlotInterval {
-  final String startTime; // "07:00"
+  final String startTime;
   final int serviceDurationMinutes;
   final int travelBufferMinutes;
   final int cleaningBufferMinutes;
@@ -175,167 +178,178 @@ class BookingModel {
   });
 }
 
+/// Temporary Worker Soft-Lock Model (Pre-Payment Reservation)
+class WorkerTemporaryLockModel {
+  final String lockId;
+  final String workerId;
+  final String customerId;
+  final String? bookingId;
+  final String serviceId;
+  final SubscriptionType? subscriptionType;
+  final DateTime bookingDate;
+  final String bookingStart;
+  final String bookingEnd;
+  final LocationCoordinates customerLocation;
+  LockStatus lockStatus;
+  final DateTime createdAt;
+  final DateTime expiresAt;
+  final String paymentSessionId;
+
+  WorkerTemporaryLockModel({
+    required this.lockId,
+    required this.workerId,
+    required this.customerId,
+    this.bookingId,
+    required this.serviceId,
+    this.subscriptionType,
+    required this.bookingDate,
+    required this.bookingStart,
+    required this.bookingEnd,
+    required this.customerLocation,
+    required this.lockStatus,
+    required this.createdAt,
+    required this.expiresAt,
+    required this.paymentSessionId,
+  });
+
+  bool get isActive =>
+      lockStatus == LockStatus.active && DateTime.now().isBefore(expiresAt);
+
+  int get remainingSeconds =>
+      max(0, expiresAt.difference(DateTime.now()).inSeconds);
+}
+
 // ============================================================================
-// 3. DYNAMIC CAPACITY ENGINE
+// 3. WORKER TEMPORARY LOCK REPOSITORY & SERVICE
 // ============================================================================
 
-class CapacityEngine {
-  /// Calculates maximum job capacity for a shift based on duration & buffers
-  static int calculateShiftMaxCapacity({
-    required ShiftWindow shift,
-    required int averageServiceMinutes,
-    int travelBufferMinutes = 20,
-    int cleaningBufferMinutes = 10,
-  }) {
-    final shiftLengthMinutes = shift.endMinutes - shift.startMinutes;
-    final totalJobMinutes =
-        averageServiceMinutes + travelBufferMinutes + cleaningBufferMinutes;
-    return (shiftLengthMinutes / totalJobMinutes).floor();
+class LockRepository {
+  final List<WorkerTemporaryLockModel> _locks = [];
+
+  Future<void> saveLock(WorkerTemporaryLockModel lock) async {
+    _locks.add(lock);
   }
 
-  /// Evaluates remaining booking capacity for a worker on a target shift
-  static int calculateRemainingCapacity({
-    required WorkerModel worker,
-    required ShiftWindow shift,
-    required DateTime date,
-    required List<BookingModel> existingBookingsToday,
-    required int averageServiceMinutes,
-  }) {
-    final maxCapacity = calculateShiftMaxCapacity(
-      shift: shift,
-      averageServiceMinutes: averageServiceMinutes,
+  Future<WorkerTemporaryLockModel?> findLockById(String lockId) async {
+    return _locks.firstWhere(
+      (l) => l.lockId == lockId,
+      orElse: () => null as WorkerTemporaryLockModel,
+    );
+  }
+
+  Future<List<WorkerTemporaryLockModel>> getActiveLocksForWorker(
+      String workerId, DateTime date) async {
+    final now = DateTime.now();
+    return _locks.where((l) {
+      return l.workerId == workerId &&
+          l.bookingDate.year == date.year &&
+          l.bookingDate.month == date.month &&
+          l.bookingDate.day == date.day &&
+          l.lockStatus == LockStatus.active &&
+          now.isBefore(l.expiresAt);
+    }).toList();
+  }
+
+  Future<List<WorkerTemporaryLockModel>> getAllActiveLocks(DateTime date) async {
+    final now = DateTime.now();
+    return _locks.where((l) {
+      return l.bookingDate.year == date.year &&
+          l.bookingDate.month == date.month &&
+          l.bookingDate.day == date.day &&
+          l.lockStatus == LockStatus.active &&
+          now.isBefore(l.expiresAt);
+    }).toList();
+  }
+
+  Future<void> updateLockStatus(String lockId, LockStatus status) async {
+    final lock = await findLockById(lockId);
+    if (lock != null) {
+      lock.lockStatus = status;
+    }
+  }
+
+  /// Automatic Cleanup Scheduler: Cleans expired locks from memory/DB
+  Future<int> cleanupExpiredLocks() async {
+    final now = DateTime.now();
+    int count = 0;
+    for (final l in _locks) {
+      if (l.lockStatus == LockStatus.active && now.isAfter(l.expiresAt)) {
+        l.lockStatus = LockStatus.expired;
+        count++;
+      }
+    }
+    return count;
+  }
+}
+
+class WorkerLockService {
+  final LockRepository _lockRepository;
+  Timer? _cleanupTimer;
+
+  WorkerLockService(this._lockRepository) {
+    // Background Cleanup Scheduler running every 30 seconds
+    _cleanupTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _lockRepository.cleanupExpiredLocks();
+    });
+  }
+
+  void dispose() {
+    _cleanupTimer?.cancel();
+  }
+
+  /// Create Temporary Soft Lock before payment (Default TTL: 90 Seconds)
+  Future<WorkerTemporaryLockModel> createLock({
+    required String workerId,
+    required String customerId,
+    required String serviceId,
+    SubscriptionType? subscriptionType,
+    required DateTime bookingDate,
+    required String bookingStart,
+    required String bookingEnd,
+    required LocationCoordinates customerLocation,
+    required String paymentSessionId,
+    int ttlSeconds = 90,
+  }) async {
+    final now = DateTime.now();
+    final lock = WorkerTemporaryLockModel(
+      lockId: 'lock_${now.millisecondsSinceEpoch}_${Random().nextInt(9999)}',
+      workerId: workerId,
+      customerId: customerId,
+      serviceId: serviceId,
+      subscriptionType: subscriptionType,
+      bookingDate: bookingDate,
+      bookingStart: bookingStart,
+      bookingEnd: bookingEnd,
+      customerLocation: customerLocation,
+      lockStatus: LockStatus.active,
+      createdAt: now,
+      expiresAt: now.add(Duration(seconds: ttlSeconds)),
+      paymentSessionId: paymentSessionId,
     );
 
-    final shiftBookingsCount = existingBookingsToday.where((b) {
-      if (b.workerId != worker.id) return false;
-      return b.interval.startMinutes >= shift.startMinutes &&
-          b.interval.endMinutes <= shift.endMinutes;
-    }).length;
+    await _lockRepository.saveLock(lock);
+    return lock;
+  }
 
-    return max(0, maxCapacity - shiftBookingsCount);
+  Future<void> releaseLock(String lockId) async {
+    await _lockRepository.updateLockStatus(lockId, LockStatus.cancelled);
   }
 }
 
 // ============================================================================
-// 4. WORKER RANKING & ROUTE OPTIMIZATION ENGINE (8-TIER)
-// ============================================================================
-
-class RankedWorker {
-  final WorkerModel worker;
-  final double distanceKm;
-  final double estimatedTravelMinutes;
-  final bool isTravelFeasible;
-
-  RankedWorker({
-    required this.worker,
-    required this.distanceKm,
-    required this.estimatedTravelMinutes,
-    required this.isTravelFeasible,
-  });
-}
-
-class WorkerRankingEngine {
-  /// Ranks candidate workers according to 8-Tier Priority Strategy
-  static List<RankedWorker> rankWorkers({
-    required List<WorkerModel> candidateWorkers,
-    required LocationCoordinates customerLocation,
-    required List<BookingModel> existingBookingsToday,
-    required DateTime targetDate,
-    required TimeSlotInterval newInterval,
-  }) {
-    final List<RankedWorker> rankedList = [];
-
-    for (final worker in candidateWorkers) {
-      final workerBookings = existingBookingsToday
-          .where((b) => b.workerId == worker.id)
-          .toList();
-
-      LocationCoordinates referenceLocation = worker.currentLocation;
-      bool isFeasible = true;
-      double travelMinutes = 0.0;
-
-      if (workerBookings.isNotEmpty) {
-        workerBookings.sort((a, b) =>
-            a.interval.endMinutes.compareTo(b.interval.endMinutes));
-
-        final priorBookings = workerBookings
-            .where((b) => b.interval.endMinutes <= newInterval.startMinutes)
-            .toList();
-
-        if (priorBookings.isNotEmpty) {
-          final lastBooking = priorBookings.last;
-          referenceLocation = lastBooking.location;
-
-          final double dist = referenceLocation.distanceTo(customerLocation);
-          travelMinutes = (dist / 20.0) * 60; // 20 km/h avg urban speed
-
-          // Travel Feasibility Check: previousBookingEnd + travelTime <= newBookingStart
-          if (lastBooking.interval.endMinutes + travelMinutes >
-              newInterval.startMinutes) {
-            isFeasible = false;
-          }
-        }
-      } else {
-        final double dist = referenceLocation.distanceTo(customerLocation);
-        travelMinutes = (dist / 20.0) * 60;
-      }
-
-      final double distanceKm = referenceLocation.distanceTo(customerLocation);
-
-      rankedList.add(RankedWorker(
-        worker: worker,
-        distanceKm: distanceKm,
-        estimatedTravelMinutes: travelMinutes,
-        isTravelFeasible: isFeasible,
-      ));
-    }
-
-    // Filter out travel-infeasible workers
-    final feasibleWorkers =
-        rankedList.where((rw) => rw.isTravelFeasible).toList();
-
-    // 8-Tier Sorting Strategy
-    feasibleWorkers.sort((a, b) {
-      // Priority 4: Nearest to customer's location / previous booking
-      final int distComp = a.distanceKm.compareTo(b.distanceKm);
-      if (distComp != 0) return distComp;
-
-      // Priority 5: Shortest travel time
-      final int travelComp =
-          a.estimatedTravelMinutes.compareTo(b.estimatedTravelMinutes);
-      if (travelComp != 0) return travelComp;
-
-      // Priority 6: Least workload today
-      final int bookingsComp =
-          a.worker.bookingsTodayCount.compareTo(b.worker.bookingsTodayCount);
-      if (bookingsComp != 0) return bookingsComp;
-
-      // Priority 7: Highest Rating
-      final int ratingComp = b.worker.rating.compareTo(a.worker.rating);
-      if (ratingComp != 0) return ratingComp;
-
-      // Priority 8: Longest Idle Time
-      return a.worker.lastBookingEndedAt
-          .compareTo(b.worker.lastBookingEndedAt);
-    });
-
-    return feasibleWorkers;
-  }
-}
-
-// ============================================================================
-// 5. TIME-BASED CAPACITY LOCKING ENGINE
+// 4. 8-LEVEL AVAILABILITY HIERARCHY ENGINE
 // ============================================================================
 
 class TimeBasedCapacityLockingEngine {
-  /// Evaluates worker eligibility for a precise time interval (service + travel + buffer)
+  /// Evaluates worker availability across all 8 Level Checks (Confirmed Bookings + Temporary Locks)
   static bool isWorkerAvailableForInterval({
     required WorkerModel worker,
     required DateTime date,
     required TimeSlotInterval interval,
     required List<BookingModel> existingBookings,
+    required List<WorkerTemporaryLockModel> activeLocks,
   }) {
-    // 1. Check Leave
+    // 1. Check Leaves
     final isOnLeave = worker.leaves.any((l) =>
         l.date.year == date.year &&
         l.date.month == date.month &&
@@ -354,23 +368,37 @@ class TimeBasedCapacityLockingEngine {
       if (interval.overlapsWithRaw(breakStart, breakEnd)) return false;
     }
 
-    // 3. Check Existing Booking Overlaps (TIME-BASED LOCKING)
+    // 3. Check Confirmed Bookings Overlap
     final workerBookings =
         existingBookings.where((b) => b.workerId == worker.id);
     for (final booking in workerBookings) {
       if (interval.overlapsWith(booking.interval)) return false;
     }
 
+    // 4. Check ACTIVE Temporary Soft Locks Overlap
+    final workerLocks = activeLocks.where((l) => l.workerId == worker.id && l.isActive);
+    for (final lock in workerLocks) {
+      final partsStart = lock.bookingStart.split(':');
+      final partsEnd = lock.bookingEnd.split(':');
+      final lockStart =
+          int.parse(partsStart[0]) * 60 + int.parse(partsStart[1]);
+      final lockEnd =
+          int.parse(partsEnd[0]) * 60 + int.parse(partsEnd[1]);
+
+      if (interval.overlapsWithRaw(lockStart, lockEnd)) return false;
+    }
+
     return true;
   }
 
-  /// Calculates dynamic slot availability count for UI rendering
+  /// Dynamic Real-Time Slot Availability Generator
   static Map<String, int> calculateRealtimeSlotAvailability({
     required List<String> uiTimeSlots,
     required int serviceDurationMinutes,
     required List<WorkerModel> allWorkers,
     required DateTime date,
     required List<BookingModel> existingBookings,
+    required List<WorkerTemporaryLockModel> activeLocks,
   }) {
     final Map<String, int> availabilityMap = {};
 
@@ -387,6 +415,7 @@ class TimeBasedCapacityLockingEngine {
           date: date,
           interval: interval,
           existingBookings: existingBookings,
+          activeLocks: activeLocks,
         )) {
           availableWorkerCount++;
         }
@@ -397,84 +426,77 @@ class TimeBasedCapacityLockingEngine {
 
     return availabilityMap;
   }
+}
 
-  /// Assigns single worker for single or dual subscriptions (Breakfast + Lunch / Lunch + Dinner)
-  static WorkerModel? assignWorker({
-    required SubscriptionType subscriptionType,
-    required DateTime date,
-    required TimeSlotInterval morningInterval,
-    required TimeSlotInterval? eveningInterval,
-    required LocationCoordinates customerLocation,
-    required List<WorkerModel> allWorkers,
+// ============================================================================
+// 5. PAYMENT COORDINATOR & PRE-CONFIRMATION VALIDATION
+// ============================================================================
+
+class PaymentCoordinator {
+  final WorkerLockService _lockService;
+  final LockRepository _lockRepository;
+
+  PaymentCoordinator(this._lockService, this._lockRepository);
+
+  /// Atomic Pre-Confirmation Check & Checkout Finalization
+  Future<BookingModel> finalizePaymentAndConfirmBooking({
+    required String lockId,
+    required String paymentSessionId,
     required List<BookingModel> existingBookings,
-  }) {
-    final isDualSubscription =
-        subscriptionType == SubscriptionType.breakfastAndLunch ||
-            subscriptionType == SubscriptionType.lunchAndDinner;
+    required List<WorkerModel> allWorkers,
+  }) async {
+    final lock = await _lockRepository.findLockById(lockId);
 
-    if (isDualSubscription) {
-      if (eveningInterval == null &&
-          subscriptionType == SubscriptionType.lunchAndDinner) {
-        return null;
-      }
-
-      final secondInterval = eveningInterval ?? morningInterval;
-
-      // Filter workers available for BOTH booking windows
-      final candidateWorkers = allWorkers.where((worker) {
-        final morningAvailable = isWorkerAvailableForInterval(
-          worker: worker,
-          date: date,
-          interval: morningInterval,
-          existingBookings: existingBookings,
-        );
-
-        final secondAvailable = isWorkerAvailableForInterval(
-          worker: worker,
-          date: date,
-          interval: secondInterval,
-          existingBookings: existingBookings,
-        );
-
-        return morningAvailable && secondAvailable;
-      }).toList();
-
-      if (candidateWorkers.isEmpty) {
-        // DO NOT SPLIT BOOKING -> Return null ("No Worker Available")
-        return null;
-      }
-
-      final ranked = WorkerRankingEngine.rankWorkers(
-        candidateWorkers: candidateWorkers,
-        customerLocation: customerLocation,
-        existingBookingsToday: existingBookings,
-        targetDate: date,
-        newInterval: morningInterval,
-      );
-
-      return ranked.isEmpty ? null : ranked.first.worker;
-    } else {
-      // Single Booking (Breakfast / Lunch / Dinner)
-      final candidateWorkers = allWorkers.where((worker) {
-        return isWorkerAvailableForInterval(
-          worker: worker,
-          date: date,
-          interval: morningInterval,
-          existingBookings: existingBookings,
-        );
-      }).toList();
-
-      if (candidateWorkers.isEmpty) return null;
-
-      final ranked = WorkerRankingEngine.rankWorkers(
-        candidateWorkers: candidateWorkers,
-        customerLocation: customerLocation,
-        existingBookingsToday: existingBookings,
-        targetDate: date,
-        newInterval: morningInterval,
-      );
-
-      return ranked.isEmpty ? null : ranked.first.worker;
+    // 1. Verify Lock Exists & Is Still ACTIVE
+    if (lock == null || !lock.isActive) {
+      throw Exception('This slot has just become unavailable.');
     }
+
+    // 2. Verify Payment Session matches
+    if (lock.paymentSessionId != paymentSessionId) {
+      throw Exception('Invalid payment session signature.');
+    }
+
+    final worker = allWorkers.firstWhere(
+      (w) => w.id == lock.workerId,
+      orElse: () => throw Exception('Assigned worker no longer active.'),
+    );
+
+    final interval = TimeSlotInterval(
+      startTime: lock.bookingStart,
+      serviceDurationMinutes: 60, // Or parsed from bookingEnd - bookingStart
+    );
+
+    // 3. Re-verify Worker Availability (Atomic Double-Check)
+    final activeLocksExceptCurrent = (await _lockRepository.getAllActiveLocks(lock.bookingDate))
+        .where((l) => l.lockId != lockId)
+        .toList();
+
+    final isStillAvailable = TimeBasedCapacityLockingEngine.isWorkerAvailableForInterval(
+      worker: worker,
+      date: lock.bookingDate,
+      interval: interval,
+      existingBookings: existingBookings,
+      activeLocks: activeLocksExceptCurrent,
+    );
+
+    if (!isStillAvailable) {
+      await _lockService.releaseLock(lockId);
+      throw Exception('This slot has just become unavailable.');
+    }
+
+    // 4. Convert Lock -> Confirmed Booking
+    await _lockRepository.updateLockStatus(lockId, LockStatus.confirmed);
+
+    final confirmedBooking = BookingModel(
+      id: 'b_${DateTime.now().millisecondsSinceEpoch}',
+      workerId: lock.workerId,
+      customerId: lock.customerId,
+      date: lock.bookingDate,
+      interval: interval,
+      location: lock.customerLocation,
+    );
+
+    return confirmedBooking;
   }
 }

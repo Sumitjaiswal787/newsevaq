@@ -4,6 +4,11 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.11] - 2026-07-21
+
+### Added
+- **Temporary Worker Soft-Locking System (Race Condition Protection)**: Implemented 90-second soft-reservation engine before payment to prevent double bookings. Locked workers are instantly excluded from availability calculations across active clients. Documented in [AGENTS.md](file:///c:/Users/sumitjaiswal/Desktop/sevaq_new/SEVAQ-16580cb5e3e78e0c1b06bc21433871a6cc4e3cb0/.agents/AGENTS.md).
+
 ## [1.0.10] - 2026-07-21
 
 ### Changed
