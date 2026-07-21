@@ -23,15 +23,23 @@ export class AppController {
   @Delete('purge-all-bookings-now')
   async purgeAllBookingsNow() {
     const logs: string[] = [];
+
+    // Delete child records first to satisfy FK constraints
+    try { await this.dataSource.query('DELETE FROM reviews'); logs.push('✅ Deleted reviews'); } catch (e: any) { logs.push(`⚠️ Reviews: ${e.message}`); }
+    try { await this.dataSource.query('DELETE FROM payments'); logs.push('✅ Deleted payments'); } catch (e: any) { logs.push(`⚠️ Payments: ${e.message}`); }
+    try { await this.dataSource.query('DELETE FROM service_requests'); logs.push('✅ Deleted service_requests'); } catch (e: any) { logs.push(`⚠️ Service requests: ${e.message}`); }
+    try { await this.dataSource.query('DELETE FROM subscription_locks'); logs.push('✅ Cleaned subscription_locks'); } catch (e: any) {}
+    try { await this.dataSource.query('DELETE FROM worker_temporary_locks'); logs.push('✅ Cleaned worker_temporary_locks'); } catch (e: any) {}
+    
     try {
-      await this.dataSource.query('DELETE FROM bookings');
-      logs.push('✅ Deleted bookings');
+      const res = await this.dataSource.query('DELETE FROM bookings');
+      logs.push(`✅ Deleted bookings`);
     } catch (e: any) {
       try {
         await this.dataSource.query('TRUNCATE TABLE bookings CASCADE');
         logs.push('✅ Truncated bookings CASCADE');
       } catch (err: any) {
-        logs.push(`❌ Delete bookings failed: ${err.message}`);
+        logs.push(`❌ Bookings delete error: ${err.message}`);
       }
     }
 
@@ -41,10 +49,6 @@ export class AppController {
     } catch (e: any) {
       logs.push(`❌ Reset slots failed: ${e.message}`);
     }
-
-    try { await this.dataSource.query('DELETE FROM subscription_locks'); logs.push('✅ Cleaned subscription_locks'); } catch (e: any) {}
-    try { await this.dataSource.query('DELETE FROM worker_temporary_locks'); logs.push('✅ Cleaned worker_temporary_locks'); } catch (e: any) {}
-    try { await this.dataSource.query('DELETE FROM subscriptions'); logs.push('✅ Cleaned subscriptions'); } catch (e: any) {}
 
     return {
       success: true,
