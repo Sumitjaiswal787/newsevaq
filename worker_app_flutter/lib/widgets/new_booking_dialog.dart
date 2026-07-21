@@ -24,14 +24,29 @@ class NewBookingDialogData {
   });
 
   factory NewBookingDialogData.fromMap(Map<String, dynamic> data) {
+    String extract(List<String> keys, String defaultValue) {
+      for (final key in keys) {
+        if (data.containsKey(key) &&
+            data[key] != null &&
+            data[key].toString().trim().isNotEmpty) {
+          return data[key].toString().trim();
+        }
+      }
+      return defaultValue;
+    }
+
+    final rawPrice = extract(['price', 'totalPrice', 'total_price', 'amount'], '0')
+        .replaceAll('₹', '')
+        .trim();
+
     return NewBookingDialogData(
-      bookingId: data['bookingId'] ?? '',
-      serviceName: data['serviceName'] ?? 'Service',
-      serviceDate: data['serviceDate'] ?? '',
-      startTime: data['startTime'] ?? '',
-      customerName: data['customerName'] ?? 'Customer',
-      customerAddress: data['customerAddress'],
-      price: data['price'] ?? '0',
+      bookingId: extract(['bookingId', 'booking_id', 'id'], ''),
+      serviceName: extract(['serviceName', 'service_name', 'service', 'title'], 'Home Service'),
+      serviceDate: extract(['serviceDate', 'service_date', 'date', 'scheduledDate', 'scheduled_date'], ''),
+      startTime: extract(['startTime', 'start_time', 'time'], ''),
+      customerName: extract(['customerName', 'customer_name', 'userName', 'user_name', 'customer'], 'Customer'),
+      customerAddress: data['customerAddress']?.toString() ?? data['customer_address']?.toString() ?? data['address']?.toString(),
+      price: rawPrice.isEmpty ? '0' : rawPrice,
     );
   }
 }
@@ -195,14 +210,24 @@ class _NewBookingDialogState extends State<NewBookingDialog>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _buildDetailRow(Icons.cleaning_services_outlined,
-                        widget.data.serviceName),
-                    const SizedBox(height: AppSpacing.sm),
-                    _buildDetailRow(Icons.calendar_today_outlined,
-                        '${widget.data.serviceDate} at ${widget.data.startTime}'),
+                        widget.data.serviceName.isEmpty ? 'Home Service' : widget.data.serviceName),
                     const SizedBox(height: AppSpacing.sm),
                     _buildDetailRow(
-                        Icons.person_outline, widget.data.customerName),
-                    if (widget.data.customerAddress != null) ...[
+                      Icons.calendar_today_outlined,
+                      (widget.data.serviceDate.isNotEmpty && widget.data.startTime.isNotEmpty)
+                          ? '${widget.data.serviceDate} at ${widget.data.startTime}'
+                          : (widget.data.serviceDate.isNotEmpty
+                              ? widget.data.serviceDate
+                              : (widget.data.startTime.isNotEmpty
+                                  ? widget.data.startTime
+                                  : 'Scheduled Service')),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    _buildDetailRow(
+                        Icons.person_outline,
+                        widget.data.customerName.isEmpty ? 'Customer' : widget.data.customerName),
+                    if (widget.data.customerAddress != null &&
+                        widget.data.customerAddress!.isNotEmpty) ...[
                       const SizedBox(height: AppSpacing.sm),
                       _buildDetailRow(Icons.location_on_outlined,
                           widget.data.customerAddress!),
@@ -212,7 +237,9 @@ class _NewBookingDialogState extends State<NewBookingDialog>
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         Text(
-                          '₹${widget.data.price}',
+                          widget.data.price.startsWith('₹')
+                              ? widget.data.price
+                              : '₹${widget.data.price}',
                           style: Theme.of(context)
                               .textTheme
                               .headlineSmall

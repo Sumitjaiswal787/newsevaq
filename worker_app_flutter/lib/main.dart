@@ -309,10 +309,10 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   void _showNewBookingDialogWithData(Map<String, dynamic> data) {
     if (!mounted) return;
 
-    final bookingId = data['bookingId']?.toString() ?? 'unknown';
-    final serviceName = data['serviceName'] ?? 'Service';
-    final serviceDate = data['serviceDate'] ?? '';
-    final startTime = data['startTime'] ?? '';
+    final bookingId = data['bookingId']?.toString() ??
+        data['booking_id']?.toString() ??
+        data['id']?.toString() ??
+        'unknown';
 
     // Mark this booking as recently shown to prevent duplicates
     _recentlyShownBookingIds.add(bookingId);
@@ -320,15 +320,8 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
       _recentlyShownBookingIds.remove(bookingId);
     });
 
-    // Build dialog data from FCM payload
-    final dialogData = NewBookingDialogData(
-      bookingId: bookingId,
-      serviceName: serviceName,
-      serviceDate: serviceDate,
-      startTime: startTime,
-      customerName: 'Customer',
-      price: '₹0',
-    );
+    // Build dialog data using flexible key parser
+    final dialogData = NewBookingDialogData.fromMap(data);
 
     showDialog(
       context: context,
@@ -336,8 +329,6 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
       builder: (context) => NewBookingDialog(
         data: dialogData,
         onViewDetails: () {
-          // Dialog already dismisses itself in _viewDetails()
-          // Navigate to bookings screen
           context.read<BookingProvider>().fetchBookings();
         },
       ),
