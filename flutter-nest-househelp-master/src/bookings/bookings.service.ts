@@ -1390,15 +1390,23 @@ export class BookingsService implements OnApplicationBootstrap {
   async assignWorker(id: string, workerId: number) {
     const startTimeMs = Date.now();
     return await this.dataSource.transaction(async (transactionalEntityManager) => {
-      // 1. Lock WORKER first to guarantee standardized Lock Hierarchy (Worker -> Slot -> Booking -> Assignment)
+      // 1. Lock WORKER first without relations to prevent PG 0A000 outer join lock failure
       const worker = await transactionalEntityManager.findOne(Worker, {
         where: { id: workerId },
-        relations: ['user'],
         lock: { mode: 'pessimistic_write' },
       });
 
       if (!worker) {
         throw new BadRequestException('Worker not found');
+      }
+
+      // Load worker relations after lock is safely acquired
+      const workerWithUser = await transactionalEntityManager.findOne(Worker, {
+        where: { id: workerId },
+        relations: ['user'],
+      });
+      if (workerWithUser) {
+        worker.user = workerWithUser.user;
       }
 
       // 2. Lock BOOKING second

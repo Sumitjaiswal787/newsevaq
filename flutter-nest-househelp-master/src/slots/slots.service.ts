@@ -562,16 +562,20 @@ export class SlotsService {
         });
       }
 
-      // 3. Lock SLOT second
+      // 3. Lock SLOT second (WITHOUT relations to prevent PG 0A000 outer join lock error)
       const slot = await queryRunner.manager.findOne(Slot, {
         where: { id: slotId },
-        relations: ['worker'],
         lock: { mode: 'pessimistic_write' },
       });
 
       if (!slot) {
         await queryRunner.rollbackTransaction();
         return { success: false, error: 'Slot not found' };
+      }
+
+      // Attach worker reference post-lock
+      if (slotMeta.worker) {
+        slot.worker = slotMeta.worker;
       }
 
       if (slot.isBooked) {

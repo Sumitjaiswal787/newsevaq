@@ -4,6 +4,11 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.13] - 2026-07-21
+
+### Fixed
+- **PostgreSQL Pessimistic Lock Outer Join Fix (PG Code 0A000)**: Decoupled relation loading from `pessimistic_write` lock queries in `SlotsService.bookSlotAtomic` and `BookingsService.assignWorker`. Resolved PostgreSQL outer join lock error by locking primary target entities (`Worker`, `Slot`) without relations and attaching relation instances post-lock.
+
 ## [1.0.12] - 2026-07-21
 
 ### Fixed
