@@ -1,4 +1,4 @@
-import { Controller, Get, Post, UseGuards, Inject } from '@nestjs/common';
+import { Controller, Get, Post, Delete, UseGuards, Inject } from '@nestjs/common';
 import { AppService } from './app.service';
 import { HealthService } from './health/health.service';
 import { SeedServiceAreas } from './database/seeds/seed-service-areas';
@@ -17,6 +17,24 @@ export class AppController {
     private readonly healthService: HealthService,
     @Inject(DataSource) private readonly dataSource: DataSource,
   ) {}
+
+  @Get('purge-all-bookings-now')
+  @Post('purge-all-bookings-now')
+  @Delete('purge-all-bookings-now')
+  async purgeAllBookingsNow() {
+    return await this.dataSource.transaction(async (manager) => {
+      const countRes = await manager.query('SELECT COUNT(*) FROM bookings');
+      await manager.query('DELETE FROM bookings');
+      await manager.query('UPDATE slots SET "isBooked" = false, "currentBookings" = 0');
+      try { await manager.query('DELETE FROM subscription_locks'); } catch (e) {}
+      try { await manager.query('DELETE FROM worker_temporary_locks'); } catch (e) {}
+      return {
+        success: true,
+        message: 'Successfully purged all bookings and reset slots on production.',
+        purgedBookingsCount: parseInt(countRes[0]?.count || '0', 10),
+      };
+    });
+  }
 
   @Get()
   getRoot() {
