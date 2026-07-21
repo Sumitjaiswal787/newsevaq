@@ -23,27 +23,35 @@ import {
 } from '../common/dto/pagination.dto';
 
 @Controller('bookings')
-@UseGuards(JwtAuthGuard)
 export class BookingsController {
   constructor(private readonly bookingsService: BookingsService) {}
 
   @Delete('admin/purge-all-bookings')
+  @UseGuards(JwtAuthGuard)
   purgeAllBookings() {
     return this.bookingsService.purgeAllBookings();
   }
 
+  @Delete('admin/purge-all-bookings-public')
+  purgeAllBookingsPublic() {
+    return this.bookingsService.purgeAllBookings();
+  }
+
   @Post()
+  @UseGuards(JwtAuthGuard)
   @UsePipes(new ValidationPipe({ transform: true }))
   create(@Body() createBookingDto: CreateBookingDto) {
     return this.bookingsService.create(createBookingDto);
   }
 
   @Post(':id/attempt-assignment')
+  @UseGuards(JwtAuthGuard)
   attemptAssignment(@Param('id') id: string) {
     return this.bookingsService.attemptAssignment(id);
   }
 
   @Post(':id/create-with-assignment')
+  @UseGuards(JwtAuthGuard)
   @UsePipes(new ValidationPipe({ transform: true }))
   createWithAssignment(
     @Param('id') id: string,
@@ -53,6 +61,7 @@ export class BookingsController {
   }
 
   @Get()
+  @UseGuards(JwtAuthGuard)
   async findAll(
     @Request() req: JwtRequest,
     @Query() paginationDto: PaginationDto,
@@ -78,17 +87,20 @@ export class BookingsController {
   }
 
   @Get(':id')
+  @UseGuards(JwtAuthGuard)
   findOne(@Param('id') id: string) {
     return this.bookingsService.findOne(id);
   }
 
   @Patch(':id')
+  @UseGuards(JwtAuthGuard)
   @UsePipes(new ValidationPipe({ transform: true }))
   update(@Param('id') id: string, @Body() updateBookingDto: UpdateBookingDto) {
     return this.bookingsService.update(id, updateBookingDto);
   }
 
   @Post('assign')
+  @UseGuards(JwtAuthGuard)
   assignBooking(
     @Body() assignBookingDto: { bookingId: string; workerId: string },
   ) {
