@@ -776,7 +776,7 @@ export class SubscriptionsService implements OnApplicationBootstrap {
     if (isCooking && mealPlan) {
       const mealPlanStr = String(mealPlan).toUpperCase();
       
-      if (mealPlanStr === 'BF') {
+      if (mealPlanStr === 'BF' || mealPlanStr === 'BF_LUNCH') {
         return [{ startTime: '05:30:00', endTime: '06:30:00', noteSuffix: 'Breakfast shift (5:30 AM - 6:30 AM)' }];
       }
       
@@ -784,29 +784,21 @@ export class SubscriptionsService implements OnApplicationBootstrap {
         return [{ startTime: '11:00:00', endTime: '12:00:00', noteSuffix: 'Lunch shift (11:00 AM - 12:00 PM)' }];
       }
       
-      if (mealPlanStr === 'BF_LUNCH') {
-        return [
-          { startTime: '05:30:00', endTime: '06:30:00', noteSuffix: 'Breakfast shift (5:30 AM - 6:30 AM)' },
-          { startTime: '11:00:00', endTime: '12:00:00', noteSuffix: 'Lunch shift (11:00 AM - 12:00 PM)' }
-        ];
-      }
-      
       if (mealPlanStr === 'DINNER') {
-        return [{ startTime: '17:00:00', endTime: '18:30:00', noteSuffix: 'Dinner shift (5:00 PM - 6:30 PM)' }];
+        return [{ startTime: '17:00:00', endTime: '18:00:00', noteSuffix: 'Dinner shift (5:00 PM - 6:00 PM)' }];
       }
       
       if (mealPlanStr === 'LUNCH_DINNER') {
         return [
           { startTime: '11:00:00', endTime: '12:00:00', noteSuffix: 'Lunch shift (11:00 AM - 12:00 PM)' },
-          { startTime: '17:00:00', endTime: '18:30:00', noteSuffix: 'Dinner shift (5:00 PM - 6:30 PM)' }
+          { startTime: '17:00:00', endTime: '18:00:00', noteSuffix: 'Dinner shift (5:00 PM - 6:00 PM)' }
         ];
       }
       
       if (mealPlanStr === 'FULL_DAY') {
         return [
-          { startTime: '05:30:00', endTime: '06:30:00', noteSuffix: 'Breakfast shift (5:30 AM - 6:30 AM)' },
-          { startTime: '11:00:00', endTime: '12:00:00', noteSuffix: 'Lunch shift (11:00 AM - 12:00 PM)' },
-          { startTime: '17:00:00', endTime: '18:30:00', noteSuffix: 'Dinner shift (5:00 PM - 6:30 PM)' }
+          { startTime: '05:30:00', endTime: '06:30:00', noteSuffix: 'Morning shift (5:30 AM - 6:30 AM)' },
+          { startTime: '17:00:00', endTime: '18:00:00', noteSuffix: 'Evening shift (5:00 PM - 6:00 PM)' }
         ];
       }
     }

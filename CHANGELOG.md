@@ -4,6 +4,16 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.15] - 2026-07-21
+
+### Changed
+- **Meal Plan Booking Generation Refactoring**: Updated `SubscriptionsService.getMealPlanTimeWindows` according to specific meal plan rules:
+  - `BF` / `BF_LUNCH`: Generates 1 morning 60-minute booking (`05:30:00 - 06:30:00`).
+  - `LUNCH`: Generates 1 afternoon 60-minute booking (`11:00:00 - 12:00:00`).
+  - `DINNER`: Generates 1 evening 60-minute booking (`17:00:00 - 18:00:00`).
+  - `LUNCH_DINNER`: Generates 2 60-minute bookings (`11:00 - 12:00` & `17:00 - 18:00`).
+  - `FULL_DAY`: Generates 2 60-minute bookings (`05:30 - 06:30` Morning & `17:00 - 18:00` Evening).
+
 ## [1.0.14] - 2026-07-21
 
 ### Fixed
