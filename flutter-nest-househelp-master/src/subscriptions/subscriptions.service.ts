@@ -239,7 +239,7 @@ export class SubscriptionsService implements OnApplicationBootstrap {
         continue;
       }
        
-      const timeWindows = this.getMealPlanTimeWindows(customPlanData, preferredTimeWindow);
+      const timeWindows = await this.getMealPlanTimeWindows(customPlanData, preferredTimeWindow, mappedServiceId);
 
       for (const window of timeWindows) {
         try {
@@ -387,7 +387,7 @@ export class SubscriptionsService implements OnApplicationBootstrap {
           continue;
         }
   
-        const timeWindows = this.getMealPlanTimeWindows((subscription as any).customPlanData, preferredTimeWindow);
+        const timeWindows = await this.getMealPlanTimeWindows((subscription as any).customPlanData, preferredTimeWindow, derivedServiceId);
   
         for (const window of timeWindows) {
           try {
@@ -563,9 +563,10 @@ export class SubscriptionsService implements OnApplicationBootstrap {
                continue;
              }
  
-             const timeWindows = this.getMealPlanTimeWindows(
+             const timeWindows = await this.getMealPlanTimeWindows(
                (subscription as any).customPlanData,
-               subscription.preferredTimeWindow || 'morning'
+               subscription.preferredTimeWindow || 'morning',
+               derivedServiceId,
              );
  
              for (const window of timeWindows) {
@@ -757,7 +758,11 @@ export class SubscriptionsService implements OnApplicationBootstrap {
     return subscription;
   }
 
-  private getMealPlanTimeWindows(customPlanData: any, preferredTimeWindow: string): { startTime: string; endTime: string; noteSuffix: string }[] {
+  private async getMealPlanTimeWindows(
+    customPlanData: any,
+    preferredTimeWindow: string,
+    serviceId?: number,
+  ): Promise<{ startTime: string; endTime: string; noteSuffix: string }[]> {
     const customData = typeof customPlanData === 'string'
       ? JSON.parse(customPlanData)
       : customPlanData;
@@ -771,31 +776,64 @@ export class SubscriptionsService implements OnApplicationBootstrap {
     if (isCooking && mealPlan) {
       const mealPlanStr = String(mealPlan).toUpperCase();
       
-      if (mealPlanStr === 'BF' || mealPlanStr === 'LUNCH' || mealPlanStr === 'BF_LUNCH') {
-        return [{ startTime: '06:00:00', endTime: '12:00:00', noteSuffix: 'Breakfast/Lunch shift (6 AM - 12 PM)' }];
+      if (mealPlanStr === 'BF') {
+        return [{ startTime: '05:30:00', endTime: '06:30:00', noteSuffix: 'Breakfast shift (5:30 AM - 6:30 AM)' }];
+      }
+      
+      if (mealPlanStr === 'LUNCH') {
+        return [{ startTime: '11:00:00', endTime: '12:00:00', noteSuffix: 'Lunch shift (11:00 AM - 12:00 PM)' }];
+      }
+      
+      if (mealPlanStr === 'BF_LUNCH') {
+        return [
+          { startTime: '05:30:00', endTime: '06:30:00', noteSuffix: 'Breakfast shift (5:30 AM - 6:30 AM)' },
+          { startTime: '11:00:00', endTime: '12:00:00', noteSuffix: 'Lunch shift (11:00 AM - 12:00 PM)' }
+        ];
       }
       
       if (mealPlanStr === 'DINNER') {
-        return [{ startTime: '16:00:00', endTime: '21:00:00', noteSuffix: 'Dinner shift (4 PM - 9 PM)' }];
+        return [{ startTime: '17:00:00', endTime: '18:30:00', noteSuffix: 'Dinner shift (5:00 PM - 6:30 PM)' }];
       }
       
-      if (mealPlanStr === 'LUNCH_DINNER' || mealPlanStr === 'FULL_DAY') {
+      if (mealPlanStr === 'LUNCH_DINNER') {
         return [
-          { startTime: '06:00:00', endTime: '12:00:00', noteSuffix: 'Breakfast/Lunch shift (6 AM - 12 PM)' },
-          { startTime: '16:00:00', endTime: '21:00:00', noteSuffix: 'Dinner shift (4 PM - 9 PM)' }
+          { startTime: '11:00:00', endTime: '12:00:00', noteSuffix: 'Lunch shift (11:00 AM - 12:00 PM)' },
+          { startTime: '17:00:00', endTime: '18:30:00', noteSuffix: 'Dinner shift (5:00 PM - 6:30 PM)' }
+        ];
+      }
+      
+      if (mealPlanStr === 'FULL_DAY') {
+        return [
+          { startTime: '05:30:00', endTime: '06:30:00', noteSuffix: 'Breakfast shift (5:30 AM - 6:30 AM)' },
+          { startTime: '11:00:00', endTime: '12:00:00', noteSuffix: 'Lunch shift (11:00 AM - 12:00 PM)' },
+          { startTime: '17:00:00', endTime: '18:30:00', noteSuffix: 'Dinner shift (5:00 PM - 6:30 PM)' }
         ];
       }
     }
 
-    // Default legacy mapping fallback
-    let startHour = 8;
-    let endHour = 12;
-    switch (preferredTimeWindow.toLowerCase()) {
-      case 'morning': startHour = 8; endHour = 12; break;
-      case 'afternoon': startHour = 12; endHour = 17; break;
-      case 'evening': startHour = 16; endHour = 21; break;
-      case 'early-morning': startHour = 6; endHour = 11; break;
+    // Default legacy mapping fallback using actual service duration
+    let durationHours = 2; // Default to 2 hours if not found
+    if (serviceId) {
+      try {
+        const serviceRepo = this.dataSource.getRepository(Service);
+        const service = await serviceRepo.findOne({ where: { id: serviceId } });
+        if (service && service.duration) {
+          durationHours = Number(service.duration);
+        }
+      } catch (e) {
+        this.logger.warn(`Could not resolve duration for service ${serviceId}: ${e.message}`);
+      }
     }
+
+    let startHour = 8;
+    switch (preferredTimeWindow.toLowerCase()) {
+      case 'morning': startHour = 8; break;
+      case 'afternoon': startHour = 12; break;
+      case 'evening': startHour = 16; break;
+      case 'early-morning': startHour = 6; break;
+    }
+    const endHour = startHour + durationHours;
+
     return [{
       startTime: `${startHour.toString().padStart(2, '0')}:00:00`,
       endTime: `${endHour.toString().padStart(2, '0')}:00:00`,

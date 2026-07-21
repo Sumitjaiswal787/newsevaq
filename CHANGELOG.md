@@ -4,6 +4,11 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.14] - 2026-07-21
+
+### Fixed
+- **Subscription Booking Duration Calculation**: Refactored `SubscriptionsService.getMealPlanTimeWindows` to return actual service durations (Breakfast = 60 Min, Lunch = 60 Min, Dinner = 90 Min) instead of hardcoded 5-6 hour shift intervals. Non-cooking fallback durations are dynamically queried from the mapped `Service` entity database metadata.
+
 ## [1.0.13] - 2026-07-21
 
 ### Fixed
