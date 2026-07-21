@@ -23,15 +23,23 @@ export class AppController {
   @Delete('purge-all-bookings-now')
   async purgeAllBookingsNow() {
     return await this.dataSource.transaction(async (manager) => {
-      const countRes = await manager.query('SELECT COUNT(*) FROM bookings');
-      await manager.query('DELETE FROM bookings');
+      let count = 0;
+      try {
+        const countRes = await manager.query('SELECT COUNT(*) FROM bookings');
+        count = parseInt(countRes[0]?.count || '0', 10);
+      } catch (e) {}
+
+      // Truncate bookings table and any referencing tables via CASCADE
+      await manager.query('TRUNCATE TABLE bookings CASCADE');
       await manager.query('UPDATE slots SET "isBooked" = false, "currentBookings" = 0');
-      try { await manager.query('DELETE FROM subscription_locks'); } catch (e) {}
-      try { await manager.query('DELETE FROM worker_temporary_locks'); } catch (e) {}
+      try { await manager.query('TRUNCATE TABLE subscription_locks CASCADE'); } catch (e) {}
+      try { await manager.query('TRUNCATE TABLE worker_temporary_locks CASCADE'); } catch (e) {}
+      try { await manager.query('TRUNCATE TABLE subscriptions CASCADE'); } catch (e) {}
+
       return {
         success: true,
-        message: 'Successfully purged all bookings and reset slots on production.',
-        purgedBookingsCount: parseInt(countRes[0]?.count || '0', 10),
+        message: 'Successfully purged all bookings and related data from production database.',
+        purgedBookingsCount: count,
       };
     });
   }
