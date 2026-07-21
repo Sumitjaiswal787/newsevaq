@@ -9,6 +9,8 @@ import { SeedServiceProfiles } from './database/seeds/seed-service-profiles';
 import { SeedServices } from './database/seeds/seed-services';
 import { DataSource } from 'typeorm';
 import { AdminGuard } from './auth/admin.guard';
+import { Booking } from './bookings/entities/booking.entity';
+import { Slot } from './slots/entities/slot.entity';
 
 @Controller()
 export class AppController {
@@ -24,37 +26,48 @@ export class AppController {
   async purgeAllBookingsNow() {
     const logs: string[] = [];
 
-    // Delete child records first to satisfy FK constraints
-    try { await this.dataSource.query('DELETE FROM reviews'); logs.push('✅ Deleted reviews'); } catch (e: any) { logs.push(`⚠️ Reviews: ${e.message}`); }
-    try { await this.dataSource.query('DELETE FROM payments'); logs.push('✅ Deleted payments'); } catch (e: any) { logs.push(`⚠️ Payments: ${e.message}`); }
-    try { await this.dataSource.query('DELETE FROM service_requests'); logs.push('✅ Deleted service_requests'); } catch (e: any) { logs.push(`⚠️ Service requests: ${e.message}`); }
-    try { await this.dataSource.query('DELETE FROM subscription_locks'); logs.push('✅ Cleaned subscription_locks'); } catch (e: any) {}
-    try { await this.dataSource.query('DELETE FROM worker_temporary_locks'); logs.push('✅ Cleaned worker_temporary_locks'); } catch (e: any) {}
-    
     try {
-      const res = await this.dataSource.query('DELETE FROM bookings');
-      logs.push(`✅ Deleted bookings`);
-    } catch (e: any) {
+      // Clear all child / related entities using raw SQL with correct singular/plural table names
+      try { await this.dataSource.query('DELETE FROM "review"'); logs.push('✅ Deleted review'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "reviews"'); logs.push('✅ Deleted reviews'); } catch (err) {} }
+      try { await this.dataSource.query('DELETE FROM "payment"'); logs.push('✅ Deleted payment'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "payments"'); logs.push('✅ Deleted payments'); } catch (e: any) {} }
+      try { await this.dataSource.query('DELETE FROM "service_request"'); logs.push('✅ Deleted service_request'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "service_requests"'); logs.push('✅ Deleted service_requests'); } catch (e: any) {} }
+
+      // Clear main booking entity
       try {
-        await this.dataSource.query('TRUNCATE TABLE bookings CASCADE');
-        logs.push('✅ Truncated bookings CASCADE');
-      } catch (err: any) {
-        logs.push(`❌ Bookings delete error: ${err.message}`);
+        await this.dataSource.getRepository(Booking).clear();
+        logs.push('✅ Cleared booking table via TypeORM');
+      } catch (e: any) {
+        try {
+          await this.dataSource.query('DELETE FROM "booking"');
+          logs.push('✅ Deleted from "booking" table');
+        } catch (err: any) {
+          logs.push(`❌ Booking clear error: ${err.message}`);
+        }
       }
-    }
 
-    try {
-      await this.dataSource.query('UPDATE slots SET "isBooked" = false, "currentBookings" = 0');
-      logs.push('✅ Reset slots availability');
-    } catch (e: any) {
-      logs.push(`❌ Reset slots failed: ${e.message}`);
-    }
+      // Reset slot availability
+      try {
+        await this.dataSource.getRepository(Slot).createQueryBuilder()
+          .update()
+          .set({ isBooked: false, currentBookings: 0 })
+          .execute();
+        logs.push('✅ Reset slots availability via TypeORM');
+      } catch (e: any) {
+        logs.push(`❌ Reset slots failed: ${e.message}`);
+      }
 
-    return {
-      success: true,
-      message: 'Purge operation completed on production database.',
-      details: logs,
-    };
+      return {
+        success: true,
+        message: 'Purge operation completed on production database.',
+        details: logs,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        details: logs,
+      };
+    }
   }
 
   @Get()
