@@ -460,7 +460,7 @@ class _OtpLoginScreenState extends State<OtpLoginScreen>
         ],
       );
 
-  // 6-box OTP input using hidden TextField + overlay boxes
+  // 6-box OTP input using direct hit-test TextField + styled background boxes
   Widget _otpBoxes() {
     final text = _otpController.text;
 
@@ -468,28 +468,8 @@ class _OtpLoginScreenState extends State<OtpLoginScreen>
       height: 68,
       child: Stack(
         children: [
-          // Hidden TextField (size 0, invisible, receives keyboard input)
-          Opacity(
-            opacity: 0.0,
-            child: TextField(
-              controller: _otpController,
-              focusNode: _otpFocusNode,
-              autofocus: true,
-              autofillHints: const [AutofillHints.oneTimeCode],
-              keyboardType: TextInputType.number,
-              maxLength: 6,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: const InputDecoration(counterText: ''),
-            ),
-          ),
-
-          // Visible 6 boxes
-          GestureDetector(
-            onTap: () {
-              HapticService.lightTap();
-              _otpFocusNode.requestFocus();
-            },
-            behavior: HitTestBehavior.opaque,
+          // Styled 6 background boxes (IgnorePointer allows taps to pass through to TextField)
+          IgnorePointer(
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: List.generate(6, (i) {
@@ -532,6 +512,34 @@ class _OtpLoginScreenState extends State<OtpLoginScreen>
                   ),
                 );
               }),
+            ),
+          ),
+
+          // Direct Hit-Test TextField overlaying the entire 6 boxes
+          Positioned.fill(
+            child: TextField(
+              controller: _otpController,
+              focusNode: _otpFocusNode,
+              autofocus: true,
+              autofillHints: const [AutofillHints.oneTimeCode],
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+              showCursor: false,
+              enableInteractiveSelection: false,
+              style: const TextStyle(color: Colors.transparent, fontSize: 1),
+              cursorColor: Colors.transparent,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: const InputDecoration(
+                counterText: '',
+                fillColor: Colors.transparent,
+                filled: true,
+                border: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                errorBorder: InputBorder.none,
+                disabledBorder: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+              ),
             ),
           ),
         ],
