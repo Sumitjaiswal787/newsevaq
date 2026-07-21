@@ -129,8 +129,12 @@ class _OtpLoginScreenState extends State<OtpLoginScreen>
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _staggerController.forward();
-      // Auto-show keyboard on OTP screen
-      _otpFocusNode.requestFocus();
+      // Auto-show keyboard on OTP screen with smooth focus delay
+      Future.delayed(const Duration(milliseconds: 250), () {
+        if (mounted) {
+          FocusScope.of(context).requestFocus(_otpFocusNode);
+        }
+      });
     });
   }
 
@@ -179,7 +183,12 @@ class _OtpLoginScreenState extends State<OtpLoginScreen>
         },
         onVerificationCompleted: (credential) async {
           debugPrint('Verification completed automatically');
-          await _handleVerificationSuccess();
+          if (credential.smsCode != null && credential.smsCode!.isNotEmpty) {
+            _otpController.text = credential.smsCode!;
+            _verifyOTP();
+          } else {
+            await _handleVerificationSuccess();
+          }
         },
         onVerificationFailed: (exception) {
           if (!mounted) return;
@@ -465,6 +474,8 @@ class _OtpLoginScreenState extends State<OtpLoginScreen>
             child: TextField(
               controller: _otpController,
               focusNode: _otpFocusNode,
+              autofocus: true,
+              autofillHints: const [AutofillHints.oneTimeCode],
               keyboardType: TextInputType.number,
               maxLength: 6,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
