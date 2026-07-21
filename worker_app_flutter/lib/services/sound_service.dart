@@ -19,15 +19,15 @@ class SoundService {
   Future<void> initialize() async {
     try {
       await _audioPlayer.setAudioContext(
-        const AudioContext(
-          android: AudioContextAndroid(
+        AudioContext(
+          android: const AudioContextAndroid(
             isSpeakerphoneOn: true,
             stayAwake: true,
             contentType: AndroidContentType.sonification,
             usageType: AndroidUsageType.alarm,
             audioFocus: AndroidAudioFocus.gain,
           ),
-          iOS: AudioContextIOS(
+          iOS: const AudioContextIOS(
             category: AVAudioSessionCategory.playback,
           ),
         ),
@@ -49,8 +49,8 @@ class SoundService {
   Future<void> playNewBookingSound() async {
     try {
       await _audioPlayer.setAudioContext(
-        const AudioContext(
-          android: AudioContextAndroid(
+        AudioContext(
+          android: const AudioContextAndroid(
             isSpeakerphoneOn: true,
             stayAwake: true,
             contentType: AndroidContentType.sonification,
