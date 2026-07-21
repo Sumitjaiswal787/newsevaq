@@ -14,6 +14,7 @@ class WorkerRegistrationScreen extends StatefulWidget {
 
 class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
   final _bioController = TextEditingController();
 
   // Services with proper UUIDs from Railway backend
@@ -31,6 +32,7 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
 
   @override
   void dispose() {
+    _nameController.dispose();
     _bioController.dispose();
     super.dispose();
   }
@@ -53,6 +55,7 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
     try {
       final auth = context.read<AuthProvider>();
       final success = await auth.registerWorkerProfile(
+        name: _nameController.text.trim(),
         bio: _bioController.text,
         serviceIds: _selectedServices.toList(),
         latitude: 28.5804579, // Greater Noida coordinates
@@ -126,6 +129,28 @@ class _WorkerRegistrationScreenState extends State<WorkerRegistrationScreen> {
                     ],
                   ),
                 ),
+              ),
+              const SizedBox(height: 24),
+
+              // Full Name Field
+              Text(
+                'Full Name',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  hintText: 'Enter your full name',
+                  prefixIcon: Icon(Icons.person),
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Please enter your full name';
+                  }
+                  return null;
+                },
               ),
               const SizedBox(height: 24),
 

@@ -294,6 +294,7 @@ class AuthProvider extends ChangeNotifier {
   // Register worker profile for already authenticated user
   // POST /workers/me/register
   Future<bool> registerWorkerProfile({
+    String? name,
     String? bio,
     List<String>? serviceIds,
     double? latitude,
@@ -307,6 +308,7 @@ class AuthProvider extends ChangeNotifier {
       debugPrint('DEBUG registerWorkerProfile: Starting registration');
 
       final response = await _apiService.post('workers/me/register', {
+        'name': name ?? '',
         'bio': bio ?? '',
         'serviceIds': serviceIds ?? [],
         'latitude': latitude ?? 28.5804579,

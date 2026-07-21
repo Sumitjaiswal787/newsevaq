@@ -442,6 +442,24 @@ export class WorkersController {
     try {
       this.logger.log(`Worker registration request from user: ${req.user.userId}`);
       
+      // Update worker name if provided
+      if (body.name && body.name.trim().length > 0) {
+        const parts = body.name.trim().split(' ');
+        const firstName = parts[0];
+        const lastName = parts.slice(1).join(' ') || '';
+        try {
+          const user = await this.workersService['usersRepository'].findOne({
+            where: [{ publicId: req.user.userId }, { email: req.user.userId }]
+          });
+          if (user) {
+            await this.usersService.update(user.id, { firstName, lastName });
+            this.logger.log(`Updated worker user name to: ${firstName} ${lastName}`);
+          }
+        } catch (e) {
+          this.logger.warn(`Could not update user name: ${e}`);
+        }
+      }
+
       // Check if user already has a worker profile
       const existingWorker = await this.workersService.findByUserId(req.user.userId);
       if (existingWorker) {
@@ -472,7 +490,7 @@ export class WorkersController {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const errorStack = error instanceof Error ? error.stack : undefined;
       this.logger.error(`Worker registration failed: ${errorMessage}`, errorStack);
-      throw error;
+      throw new BadRequestException(errorMessage);
     }
   }
 }
