@@ -1355,12 +1355,23 @@ export class BookingsService implements OnApplicationBootstrap {
   }
 
   async assignWorker(id: string, workerId: number) {
+    const startTimeMs = Date.now();
     return await this.dataSource.transaction(async (transactionalEntityManager) => {
-      // ✅ Implement PESSIMISTIC WRITE LOCK to prevent race conditions
-      // This ensures only one worker can modify this booking at a time
+      // 1. Lock WORKER first to guarantee standardized Lock Hierarchy (Worker -> Slot -> Booking -> Assignment)
+      const worker = await transactionalEntityManager.findOne(Worker, {
+        where: { id: workerId },
+        relations: ['user'],
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!worker) {
+        throw new BadRequestException('Worker not found');
+      }
+
+      // 2. Lock BOOKING second
       const booking = await transactionalEntityManager.findOne(Booking, {
         where: { id },
-        lock: { mode: 'pessimistic_write' }
+        lock: { mode: 'pessimistic_write' },
       });
 
       if (!booking) {
@@ -1370,16 +1381,6 @@ export class BookingsService implements OnApplicationBootstrap {
       // Validate booking is still unassigned
       if (booking.assignedWorkerId) {
         throw new BadRequestException('Booking has already been assigned to another worker');
-      }
-
-      // Validate worker exists
-      const worker = await transactionalEntityManager.findOne(Worker, {
-        where: { id: workerId },
-        relations: ['user'],
-      });
-
-      if (!worker) {
-        throw new BadRequestException('Worker not found');
       }
 
       // Log the worker's fcmToken for debugging

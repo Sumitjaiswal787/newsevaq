@@ -71,29 +71,27 @@ export class DailySlotGenerationScheduler implements OnApplicationBootstrap {
   }
 
   /**
-   * Run every hour to ensure slots are available for upcoming days
+   * Run every hour to ensure slots are available for upcoming 7 days
    */
   @Cron(CronExpression.EVERY_HOUR)
   async handleHourlySlotGeneration(): Promise<void> {
-    this.logger.log('Running hourly slot generation check...');
+    const startTimeMs = Date.now();
+    this.logger.log('Running hourly slot generation check (7 days lookahead)...');
     
     try {
-      // Get all active workers
       const workers = await this.workersRepository.find({
         where: { isActive: true },
       });
 
-      // Generate slots for the next 30 days (to ensure coverage for subscriptions)
       const today = new Date();
       
-      for (let dayOffset = 0; dayOffset < 45; dayOffset++) {
+      // Hourly check only looks ahead 7 days for fast execution
+      for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
         const targetDate = new Date(today);
         targetDate.setDate(today.getDate() + dayOffset);
         
-        // Create standard time slots for the day
         const timeSlots = this.createStandardTimeSlots(targetDate);
         
-        // Create slots for each worker
         for (const worker of workers) {
           try {
             await this.slotsService.createSlotsForWorker(
@@ -102,19 +100,22 @@ export class DailySlotGenerationScheduler implements OnApplicationBootstrap {
               timeSlots,
             );
           } catch (error) {
-            // Silently handle duplicate slot errors
-            if (!error.message?.includes('already exists')) {
-              this.logger.error(
-                `Failed to create slots for worker ${worker.id}: ${error.message}`,
-              );
-            }
+            this.logger.error(
+              `Failed to create slots for worker ${worker.id} on ${targetDate.toISOString().split('T')[0]} [PG Code: ${error.code || 'UNKNOWN'}]: ${error.message}`,
+              error.stack,
+            );
           }
         }
       }
 
-      this.logger.log('Hourly slot generation check completed');
+      const duration = Date.now() - startTimeMs;
+      if (duration > 500) {
+        this.logger.warn(`PERFORMANCE WARNING: Hourly slot generation check took ${duration}ms (>500ms threshold)`);
+      }
+
+      this.logger.log(`Hourly slot generation check completed in ${duration}ms`);
     } catch (error) {
-      this.logger.error(`Hourly slot generation failed: ${error.message}`);
+      this.logger.error(`Hourly slot generation failed: ${error.message}`, error.stack);
     }
   }
 

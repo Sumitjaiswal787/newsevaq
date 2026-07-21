@@ -233,18 +233,31 @@ export class SlotsService {
   }
 
   /**
-   * Enhanced slot creation with better availability management
+   * Enhanced slot creation with idempotent day-check and batch ON CONFLICT DO NOTHING insert
    */
   async createSlotsForWorker(
     workerId: number,
     date: Date,
     timeSlots: Array<{ startTime: Date; endTime: Date }>,
   ): Promise<Slot[]> {
-    this.logger.log(
-      `Creating ${timeSlots.length} slots for worker ${workerId} on ${date}`,
-    );
+    const startTimeMs = Date.now();
+    const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0);
+    const endOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59);
 
     try {
+      // 1. Idempotent check: Fast COUNT(*) query for the entire day
+      const existingCount = await this.slotsRepository.count({
+        where: {
+          worker: { id: workerId },
+          startTime: Between(startOfDay, endOfDay),
+        },
+      });
+
+      if (existingCount >= timeSlots.length) {
+        // Entire day's slots exist: Skip in 1 single query without iterating or logging 33 times!
+        return [];
+      }
+
       // Validate worker exists
       const worker = await this.workersRepository.findOne({
         where: { id: workerId },
@@ -253,11 +266,6 @@ export class SlotsService {
         throw new Error(`Worker with ID ${workerId} not found`);
       }
 
-      // Check for existing slots on the same date to avoid duplicates
-      // Use date-only comparison (ignore time) to properly detect duplicate days
-      const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-      const endOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59);
-      
       const existingSlots = await this.slotsRepository.find({
         where: {
           worker: { id: workerId },
@@ -265,15 +273,12 @@ export class SlotsService {
         },
       });
 
-      // Create new slots, skipping any that already exist on this date/time for the worker
       const slotsToCreate = timeSlots
         .filter((slotData) => {
-          const isDuplicate = existingSlots.some((existing) => {
-            const existingTime = new Date(existing.startTime).getTime();
-            const targetTime = new Date(slotData.startTime).getTime();
-            return existingTime === targetTime;
-          });
-          return !isDuplicate;
+          const targetTime = new Date(slotData.startTime).getTime();
+          return !existingSlots.some(
+            (existing) => new Date(existing.startTime).getTime() === targetTime,
+          );
         })
         .map((slotData) => {
           const slot = new Slot();
@@ -288,20 +293,30 @@ export class SlotsService {
         });
 
       if (slotsToCreate.length === 0) {
-        this.logger.log(
-          `All ${timeSlots.length} slots for worker ${workerId} on ${date} already exist. Skipping slot creation.`,
-        );
         return existingSlots;
       }
 
-      const createdSlots = await this.slotsRepository.save(slotsToCreate);
-      this.logger.log(
-        `Successfully created ${createdSlots.length} slots for worker ${workerId}`,
-      );
+      // Batch Insert with ON CONFLICT DO NOTHING (orIgnore) in 1 query
+      await this.slotsRepository
+        .createQueryBuilder()
+        .insert()
+        .into(Slot)
+        .values(slotsToCreate)
+        .orIgnore()
+        .execute();
 
-      return createdSlots;
+      const duration = Date.now() - startTimeMs;
+      if (duration > 500) {
+        this.logger.warn(`PERFORMANCE WARNING: Slot creation for worker ${workerId} took ${duration}ms (>500ms threshold)`);
+      }
+
+      return slotsToCreate;
     } catch (error) {
-      this.logger.error(`Error creating slots for worker ${workerId}:`, error);
+      const duration = Date.now() - startTimeMs;
+      this.logger.error(
+        `Error creating slots for worker ${workerId} [Duration: ${duration}ms, PG Code: ${error.code || 'UNKNOWN'}]: ${error.message}`,
+        error.stack,
+      );
       throw error;
     }
   }
@@ -516,18 +531,38 @@ export class SlotsService {
   }
 
   /**
-   * Atomic slot booking with optimistic locking - prevents race conditions
-   * Uses database transaction and version column for concurrency control
+   * Atomic slot booking enforcing Worker -> Slot lock acquisition order.
+   * Prevents race conditions and deadlocks with full PostgreSQL error logging.
    */
   async bookSlotAtomic(
     slotId: number,
   ): Promise<{ success: boolean; slot?: Slot; error?: string }> {
+    const startTimeMs = Date.now();
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
     try {
-      // Lock the slot row for update to prevent concurrent modifications
+      // 1. Fetch slot metadata without lock to identify worker ID
+      const slotMeta = await queryRunner.manager.findOne(Slot, {
+        where: { id: slotId },
+        relations: ['worker'],
+      });
+
+      if (!slotMeta) {
+        await queryRunner.rollbackTransaction();
+        return { success: false, error: 'Slot not found' };
+      }
+
+      // 2. Lock WORKER first to guarantee standardized Lock Hierarchy (Worker -> Slot -> Booking -> Assignment)
+      if (slotMeta.worker) {
+        await queryRunner.manager.findOne(Worker, {
+          where: { id: slotMeta.worker.id },
+          lock: { mode: 'pessimistic_write' },
+        });
+      }
+
+      // 3. Lock SLOT second
       const slot = await queryRunner.manager.findOne(Slot, {
         where: { id: slotId },
         relations: ['worker'],
@@ -552,10 +587,10 @@ export class SlotsService {
       // Update slot atomically
       slot.isBooked = true;
       slot.currentBookings = slot.currentBookings + 1;
-      
+
       const savedSlot = await queryRunner.manager.save(Slot, slot);
 
-      // Lock any overlapping slots for this worker
+      // Lock overlapping slots for this worker
       if (slot.worker) {
         await queryRunner.manager.createQueryBuilder()
           .update(Slot)
@@ -573,14 +608,24 @@ export class SlotsService {
 
       await queryRunner.commitTransaction();
 
-      this.logger.log(`Successfully booked slot ${slotId} atomically`);
+      const duration = Date.now() - startTimeMs;
+      if (duration > 500) {
+        this.logger.warn(`PERFORMANCE WARNING: bookSlotAtomic for slot ${slotId} took ${duration}ms (>500ms threshold)`);
+      }
+
+      this.logger.log(`Successfully booked slot ${slotId} atomically in ${duration}ms`);
       return { success: true, slot: savedSlot };
     } catch (error) {
       await queryRunner.rollbackTransaction();
-      this.logger.error(`Error in atomic slot booking for ${slotId}:`, error);
+      const duration = Date.now() - startTimeMs;
+      const pgCode = error?.code || 'UNKNOWN';
+      this.logger.error(
+        `ATOMIC BOOKING FAILURE for slot ${slotId} [Duration: ${duration}ms, PG Code: ${pgCode}]: ${error.message}`,
+        error.stack,
+      );
       return {
         success: false,
-        error: 'Booking failed due to concurrent modification',
+        error: `Booking failed due to concurrent modification (PG Code: ${pgCode})`,
       };
     } finally {
       await queryRunner.release();
