@@ -106,6 +106,22 @@ async function bootstrap() {
     fs.mkdirSync(logsDir, { recursive: true });
   }
 
+  // Pre-bootstrap Schema Synchronization for empty databases (FORCE_SYNCHRONIZE)
+  if (process.env.FORCE_SYNCHRONIZE === 'true' || process.env.AUTO_SYNCHRONIZE === 'true') {
+    try {
+      winstonLogger.log('info', '⚡ FORCE_SYNCHRONIZE enabled. Initializing & Synchronizing database tables...');
+      const { AppDataSource } = require('./database/data-source');
+      if (!AppDataSource.isInitialized) {
+        await AppDataSource.initialize();
+      }
+      await AppDataSource.synchronize();
+      winstonLogger.log('info', '✅ Database schema synchronized successfully!');
+      await AppDataSource.destroy();
+    } catch (err: any) {
+      winstonLogger.error('Failed to pre-synchronize schema:', { error: err.message });
+    }
+  }
+
   const app = await NestFactory.create(AppModule, {
     logger: winstonLogger,
   });
