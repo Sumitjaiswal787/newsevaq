@@ -452,7 +452,7 @@ export class WorkersController {
             where: [{ publicId: req.user.userId }, { email: req.user.userId }]
           });
           if (user) {
-            await this.usersService.update(user.id, { firstName, lastName });
+            await this.usersService.update(user.publicId, { firstName, lastName });
             this.logger.log(`Updated worker user name to: ${firstName} ${lastName}`);
           }
         } catch (e) {
