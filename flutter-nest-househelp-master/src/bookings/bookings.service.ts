@@ -1577,6 +1577,42 @@ export class BookingsService implements OnApplicationBootstrap {
       return null;
     }
   }
+
+  /**
+   * Purges all bookings and related data from the database
+   */
+  async purgeAllBookings(): Promise<{ message: string; deletedBookingsCount: number }> {
+    this.logger.warn('⚠️ PURGE REQUEST: Deleting all bookings and booking-related data from database!');
+    
+    return await this.dataSource.transaction(async (manager) => {
+      // 1. Delete all bookings
+      const bookingsCount = await manager.count(Booking);
+      await manager.query('DELETE FROM bookings');
+      
+      // 2. Reset all slot bookings
+      await manager.query('UPDATE slots SET "isBooked" = false, "currentBookings" = 0');
+      
+      // 3. Delete subscription locks if table exists
+      try {
+        await manager.query('DELETE FROM subscription_locks');
+      } catch (e) {
+        // Ignore if table doesn't exist
+      }
+      
+      // 4. Delete payment sessions / temporary locks if table exists
+      try {
+        await manager.query('DELETE FROM worker_temporary_locks');
+      } catch (e) {
+        // Ignore if table doesn't exist
+      }
+
+      this.logger.warn(`Successfully purged ${bookingsCount} bookings and reset all slots.`);
+      return {
+        message: 'Successfully purged all bookings and booking-related data from production.',
+        deletedBookingsCount: bookingsCount,
+      };
+    });
+  }
 }
 
 

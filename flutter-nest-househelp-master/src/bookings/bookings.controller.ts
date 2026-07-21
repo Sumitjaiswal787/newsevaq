@@ -10,6 +10,7 @@ import {
   ValidationPipe,
   UseGuards,
   Request,
+  Delete,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { JwtRequest } from '../common/types/jwt-user.type';
@@ -25,6 +26,11 @@ import {
 @UseGuards(JwtAuthGuard)
 export class BookingsController {
   constructor(private readonly bookingsService: BookingsService) {}
+
+  @Delete('admin/purge-all-bookings')
+  purgeAllBookings() {
+    return this.bookingsService.purgeAllBookings();
+  }
 
   @Post()
   @UsePipes(new ValidationPipe({ transform: true }))
