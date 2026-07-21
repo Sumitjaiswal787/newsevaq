@@ -11,7 +11,7 @@ class AppConfig {
 
   /// Production API URL — replace with your actual production domain.
   static const String _productionApiBaseUrl =
-      'https://sevaq-production.up.railway.app/api';
+      'https://newsevaq-production.up.railway.app/api';
 
   /// Development API URL used when running on iOS / web / Android via USB.
   /// Use port 3000 for local backend server (default backend port)
@@ -34,7 +34,7 @@ class AppConfig {
 
   /// Set to TRUE to use production URL in debug mode (for testing with remote backend)
   /// Set to FALSE to use localhost URL (for USB debugging with local backend)
-  static const bool useProductionForDebug = false;
+  static const bool useProductionForDebug = true;
 
   /// Returns the appropriate API base URL for the current build mode and
   /// platform.
