@@ -4,6 +4,16 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.8] - 2026-07-21
+
+### Added
+- **Railway Production Deployment**: Configured and deployed backend service to Railway (`https://newsevaq-production.up.railway.app/api`).
+- **Pre-Bootstrap Database Schema Synchronization**: Added automatic pre-bootstrap schema synchronization on startup when `FORCE_SYNCHRONIZE=true` to automatically create all base PostgreSQL tables on empty production databases.
+
+### Fixed
+- **TypeScript Incremental Build Cache Bug**: Cleaned up pre-existing compilation outputs and added `rm -f *.tsbuildinfo` to root build scripts to prevent skipped compilation on Railway.
+- **TypeORM Migrations startup crash**: Configured `migrationsRun: true` in `AppModule` with Node `path` module resolution.
+
 ## [1.0.7] - 2026-07-20
 
 ### Changed
