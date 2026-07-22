@@ -4,6 +4,11 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.19] - 2026-07-22
+
+### Fixed
+- **Fix SQL Query Failure in `getUserActiveBooking`**: Replaced invalid column reference `request.startTime` in `ServiceRequestsService.getUserActiveBooking` QueryBuilder with valid `request.timeWindow` column, resolving PostgreSQL exception `column request.starttime does not exist`.
+
 ## [1.0.18] - 2026-07-22
 
 ### Fixed

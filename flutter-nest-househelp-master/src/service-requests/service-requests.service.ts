@@ -314,7 +314,7 @@ export class ServiceRequestsService {
           statuses: ['ASSIGNED', 'IN_PROGRESS', 'REQUESTED', 'CONFIRMED'] 
         })
         .orderBy('request.date', 'ASC')
-        .addOrderBy('request.startTime', 'ASC')
+        .addOrderBy('request.timeWindow', 'ASC')
         .limit(1)
         .getOne();
 
