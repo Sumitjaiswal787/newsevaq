@@ -4,6 +4,15 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.20] - 2026-07-22
+
+### Fixed
+- **ROOT CAUSE: 6-Hour Subscription Booking Duration Bug — Definitive Fix**
+  - **Root Cause**: Flutter sends `customPlanData.serviceType = 'COOK'` (the `ServiceType` enum value from the backend). The backend `getMealPlanTimeWindows()` method in `SubscriptionsService` was checking `serviceType.toLowerCase() === 'cooking'` — which fails because `'COOK'.toLowerCase()` → `'cook'` ≠ `'cooking'`. Since `isCooking = false`, the meal plan slot detection was completely skipped and it fell through to the legacy duration fallback.
+  - **Fix 1** (`subscriptions.service.ts` Line 770): Expanded `isCooking` check to match both `'cook'` and `'cooking'` (and their category equivalents). Added comprehensive logging to trace `serviceType`, `category`, `mealPlan`, and `isCooking` on every call.
+  - **Fix 2** (`subscriptions.service.ts` Line 807): Added safety clamp in the legacy fallback: `durationHours` is now capped at `max 2` to prevent stale DB seed data (`service.duration` stored in minutes instead of hours) from producing 6-hour booking windows. Duration values > 12 are interpreted as minutes and converted.
+  - **Fix 3**: Added fallback for unknown `mealPlan` values for cooking service — defaults to `05:30-06:30` Breakfast slot instead of falling through to the legacy path.
+
 ## [1.0.19] - 2026-07-22
 
 ### Fixed

@@ -107,6 +107,36 @@ export class AppController {
     }
   }
 
+  @Get('service-duration-check')
+  async checkServiceDurations() {
+    try {
+      const rows = await this.dataSource.query(`
+        SELECT id, name, category, duration, "basePrice" 
+        FROM "service" ORDER BY id;
+      `);
+      return { success: true, services: rows };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  @Get('subscriptions-debug')
+  async debugSubscriptions() {
+    try {
+      const subs = await this.dataSource.query(`
+        SELECT id, "userId", "preferredTimeWindow", status, "custom_plan_data", "serviceProfileId", "monthlyPriceSnapshot"
+        FROM "subscriptions" ORDER BY id DESC LIMIT 10;
+      `);
+      const bookings = await this.dataSource.query(`
+        SELECT id, "subscriptionId", "startTime", "endTime", date, type, status
+        FROM "booking" WHERE type = 'subscription' ORDER BY "createdAt" DESC LIMIT 20;
+      `);
+      return { success: true, subscriptions: subs, recentSubscriptionBookings: bookings };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  }
+
   @Post('seed')
   @UseGuards(AdminGuard)
   async runSeed() {

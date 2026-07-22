@@ -767,11 +767,21 @@ export class SubscriptionsService implements OnApplicationBootstrap {
       ? JSON.parse(customPlanData)
       : customPlanData;
 
+    // ✅ FIX: Flutter sends serviceType as 'COOK' (ServiceType enum value), NOT 'cooking'.
+    // Also accept 'cook', 'cooking', 'COOK', 'COOKING' — any variation.
+    const rawServiceType = (customData?.serviceType ?? '').toLowerCase();
+    const rawCategory = (customData?.category ?? '').toLowerCase();
     const isCooking =
-      customData?.serviceType?.toLowerCase() === 'cooking' ||
-      customData?.category?.toLowerCase() === 'cooking';
+      rawServiceType === 'cook' ||
+      rawServiceType === 'cooking' ||
+      rawCategory === 'cook' ||
+      rawCategory === 'cooking';
 
     const mealPlan = customData?.mealPlan || null;
+
+    this.logger.log(
+      `🔍 getMealPlanTimeWindows: serviceType="${customData?.serviceType}", category="${customData?.category}", mealPlan="${mealPlan}", isCooking=${isCooking}`
+    );
 
     if (isCooking && mealPlan) {
       const mealPlanStr = String(mealPlan).toUpperCase();
@@ -801,16 +811,29 @@ export class SubscriptionsService implements OnApplicationBootstrap {
           { startTime: '17:00:00', endTime: '18:00:00', noteSuffix: 'Evening shift (5:00 PM - 6:00 PM)' }
         ];
       }
+
+      // Unknown meal plan for cooking — default to 1-hour breakfast window
+      this.logger.warn(`⚠️ Unknown mealPlan "${mealPlan}" for cooking service — defaulting to 05:30-06:30`);
+      return [{ startTime: '05:30:00', endTime: '06:30:00', noteSuffix: 'Default Breakfast shift (5:30 AM - 6:30 AM)' }];
     }
 
     // Default legacy mapping fallback using actual service duration
-    let durationHours = 2; // Default to 2 hours if not found
+    // ✅ FIX: Clamp durationHours to maximum 2 to prevent 6-hour bookings from bad DB seed data.
+    // The service.duration field was being stored as minutes (e.g. 360 min) but treated as hours.
+    let durationHours = 1; // Default to 1 hour for cooking, 2 for others
     if (serviceId) {
       try {
         const serviceRepo = this.dataSource.getRepository(Service);
         const service = await serviceRepo.findOne({ where: { id: serviceId } });
         if (service && service.duration) {
-          durationHours = Number(service.duration);
+          // ✅ CRITICAL: Duration field stores MINUTES. Convert to hours and clamp to max 2h.
+          const rawDuration = Number(service.duration);
+          // If duration > 12, it is stored in minutes (e.g. 60 = 1h, 120 = 2h, 360 = bad seed)
+          // If duration <= 12, it is stored in hours (legacy)
+          durationHours = rawDuration > 12
+            ? Math.min(Math.round(rawDuration / 60), 2)  // Convert minutes to hours, max 2h
+            : Math.min(rawDuration, 2);                    // Already hours, max 2h
+          this.logger.log(`🔍 Service ${serviceId} raw duration=${rawDuration}, computed durationHours=${durationHours}`);
         }
       } catch (e) {
         this.logger.warn(`Could not resolve duration for service ${serviceId}: ${e.message}`);
@@ -825,6 +848,8 @@ export class SubscriptionsService implements OnApplicationBootstrap {
       case 'early-morning': startHour = 6; break;
     }
     const endHour = startHour + durationHours;
+
+    this.logger.log(`🔍 Legacy fallback: preferredTimeWindow="${preferredTimeWindow}", startHour=${startHour}, endHour=${endHour}`);
 
     return [{
       startTime: `${startHour.toString().padStart(2, '0')}:00:00`,
