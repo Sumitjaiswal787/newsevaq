@@ -31,6 +31,8 @@ export class AppController {
       try { await this.dataSource.query('DELETE FROM "review"'); logs.push('✅ Deleted review'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "reviews"'); logs.push('✅ Deleted reviews'); } catch (err) {} }
       try { await this.dataSource.query('DELETE FROM "payment"'); logs.push('✅ Deleted payment'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "payments"'); logs.push('✅ Deleted payments'); } catch (e: any) {} }
       try { await this.dataSource.query('DELETE FROM "service_request"'); logs.push('✅ Deleted service_request'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "service_requests"'); logs.push('✅ Deleted service_requests'); } catch (e: any) {} }
+      try { await this.dataSource.query('DELETE FROM "subscriptions"'); logs.push('✅ Deleted subscriptions'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "subscription"'); logs.push('✅ Deleted subscription'); } catch (e: any) {} }
+      try { await this.dataSource.query('DELETE FROM "worker_temporary_locks"'); logs.push('✅ Deleted worker_temporary_locks'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "worker_temporary_lock"'); logs.push('✅ Deleted worker_temporary_lock'); } catch (e: any) {} }
 
       // Clear main booking entity
       try {

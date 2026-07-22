@@ -4,6 +4,11 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.16] - 2026-07-22
+
+### Fixed
+- **Comprehensive Production Purge Update**: Added `subscriptions` and `worker_temporary_locks` table deletion to `/api/purge-all-bookings-now` endpoint to clear active subscription cards and prevent automated background re-generation of daily bookings.
+
 ## [1.0.15] - 2026-07-21
 
 ### Changed
