@@ -79,10 +79,14 @@ export class BookingValidator {
   }
 
   /**
-   * Validates that booking duration is strictly <= 120 minutes (or matching 60 minutes for subscriptions).
-   * Throws an exception if a shift duration (e.g. 6 hours) is attempted to be saved as booking endTime.
+   * Validates that booking duration matches the configured service duration.
+   * Throws InvalidBookingDurationException if the validation fails.
    */
-  static validateDuration(startTimeStr: string, endTimeStr: string): void {
+  static validateDuration(
+    startTimeStr: string,
+    endTimeStr: string,
+    serviceDurationMinutes: number,
+  ): void {
     if (!startTimeStr || !endTimeStr) return;
 
     const parseMinutes = (timeStr: string) => {
@@ -94,10 +98,16 @@ export class BookingValidator {
     const endMins = parseMinutes(endTimeStr);
     const durationMinutes = endMins - startMins;
 
-    if (durationMinutes > 120) {
-      const errorMsg = `Invalid booking duration (${durationMinutes} minutes: ${startTimeStr} -> ${endTimeStr}). Shift window durations cannot be saved as booking endTime. Max allowed duration is 120 minutes.`;
+    // Convert service duration if it is in hours (<= 12)
+    const expectedMinutes = serviceDurationMinutes <= 12
+      ? serviceDurationMinutes * 60
+      : serviceDurationMinutes;
+
+    if (durationMinutes !== expectedMinutes) {
+      const errorMsg = `Invalid booking duration (${durationMinutes} minutes: ${startTimeStr} -> ${endTimeStr}). Expected duration is ${expectedMinutes} minutes based on service definition.`;
       this.logger.error(`❌ [PRE-SAVE GUARD ASSERTION FAILED]: ${errorMsg}`);
-      throw new Error(errorMsg);
+      const { InvalidBookingDurationException } = require('./exceptions/invalid-booking-duration.exception');
+      throw new InvalidBookingDurationException(errorMsg);
     }
   }
 }

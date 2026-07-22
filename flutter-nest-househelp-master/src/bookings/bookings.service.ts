@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, NotFoundException, Logger, OnApplicati
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager, Not, IsNull, In, MoreThanOrEqual } from 'typeorm';
 import { Booking } from './entities/booking.entity';
+import { BookingValidator } from './booking-validator';
 import { SlotsService } from '../slots/slots.service';
 import { DailySlotGenerationScheduler } from '../slots/daily-slot-generation.scheduler';
 import { Worker } from '../workers/entities/worker.entity';
@@ -387,6 +388,106 @@ export class BookingsService implements OnApplicationBootstrap {
     return deg * (Math.PI / 180);
   }
 
+  private parseTimeWindow(
+    date: Date,
+    timeWindow: string,
+    serviceDurationMinutes: number,
+  ): { startTime: Date; endTime: Date } {
+    let startHour = 8;
+    let startMinute = 0;
+    let endHour = 10;
+    let endMinute = 0;
+
+    const timeWindowClean = timeWindow.trim().toLowerCase();
+
+    const expectedMinutes = serviceDurationMinutes <= 12
+      ? serviceDurationMinutes * 60
+      : serviceDurationMinutes;
+
+    if (timeWindowClean.includes('am') || timeWindowClean.includes('pm')) {
+      const parts = timeWindowClean.split('-');
+      const startStr = parts[0].trim();
+      const endStr = parts[1] ? parts[1].trim() : null;
+
+      const parseTimeStr = (str: string) => {
+        const isPM = str.includes('pm');
+        const cleanStr = str.replace('am', '').replace('pm', '').trim();
+        const timeParts = cleanStr.split(':');
+        let hours = parseInt(timeParts[0], 10);
+        const minutes = parseInt(timeParts[1] || '0', 10);
+
+        if (isPM && hours < 12) hours += 12;
+        if (!isPM && hours === 12) hours = 0;
+
+        return { hours, minutes };
+      };
+
+      try {
+        const start = parseTimeStr(startStr);
+        startHour = start.hours;
+        startMinute = start.minutes;
+
+        if (endStr) {
+          const end = parseTimeStr(endStr);
+          endHour = end.hours;
+          endMinute = end.minutes;
+        } else {
+          const totalMinutes = startHour * 60 + startMinute + expectedMinutes;
+          endHour = Math.floor(totalMinutes / 60) % 24;
+          endMinute = totalMinutes % 60;
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to parse granular timeWindow: ${timeWindow}, defaulting.`);
+      }
+    } else {
+      switch (timeWindowClean) {
+        case 'morning':
+          startHour = 8;
+          break;
+        case 'afternoon':
+          startHour = 12;
+          break;
+        case 'evening':
+          startHour = 17;
+          break;
+        case 'early-morning':
+          startHour = 6;
+          break;
+        default:
+          startHour = 8;
+      }
+      const totalMinutes = startHour * 60 + startMinute + expectedMinutes;
+      endHour = Math.floor(totalMinutes / 60) % 24;
+      endMinute = totalMinutes % 60;
+    }
+
+    const startTime = new Date(
+      Date.UTC(
+        date.getFullYear(),
+        date.getMonth(),
+        date.getDate(),
+        startHour,
+        startMinute,
+        0,
+        0,
+      ),
+    );
+
+    const endTime = new Date(
+      Date.UTC(
+        date.getFullYear(),
+        date.getMonth(),
+        date.getDate(),
+        endHour,
+        endMinute,
+        0,
+        0,
+      ),
+    );
+
+    return { startTime, endTime };
+  }
+
   async create(createBookingDto: any) {
     try {
       let worker: Worker | null = null;
@@ -453,56 +554,14 @@ export class BookingsService implements OnApplicationBootstrap {
           createBookingDto.date = serviceRequest.date;
         }
 
-        // Parse time window to get start and end times
-        let startHour: number;
-        let endHour: number;
-
-        switch (serviceRequest.timeWindow.toLowerCase()) {
-          case 'morning':
-            startHour = 8;
-            endHour = 12;
-            break;
-          case 'afternoon':
-            startHour = 12;
-            endHour = 17;
-            break;
-          case 'evening':
-            startHour = 17;
-            endHour = 21;
-            break;
-          case 'early-morning':
-            startHour = 2;
-            endHour = 11;
-            break;
-          default:
-            startHour = 8;
-            endHour = 12;
-        }
-
-        // Set default times based on time window
-        const date = new Date(serviceRequest.date);
-        createBookingDto.startTime = new Date(
-          Date.UTC(
-            date.getFullYear(),
-            date.getMonth(),
-            date.getDate(),
-            startHour,
-            0,
-            0,
-            0,
-          ),
+        // Parse time window to get start and end times using helper
+        const parsedWindow = this.parseTimeWindow(
+          new Date(serviceRequest.date),
+          serviceRequest.timeWindow,
+          serviceRequest.service?.duration || 2, // Default to 2 if not loaded
         );
-        createBookingDto.endTime = new Date(
-          Date.UTC(
-            date.getFullYear(),
-            date.getMonth(),
-            date.getDate(),
-            endHour,
-            0,
-            0,
-            0,
-          ),
-        );
+        createBookingDto.startTime = parsedWindow.startTime;
+        createBookingDto.endTime = parsedWindow.endTime;
       } else {
         // Validate user exists (using publicId since userId is UUID)
         const user = await this.usersRepository.findOne({
@@ -796,6 +855,18 @@ export class BookingsService implements OnApplicationBootstrap {
       
       if (duplicateBookings.length > 0) {
         throw new BadRequestException('You already have a booking for this service at the selected time.');
+      }
+
+      // Validate booking duration before creation
+      const service = await this.servicesRepository.findOne({
+        where: { id: bookingData.serviceId },
+      });
+      if (service) {
+        BookingValidator.validateDuration(
+          bookingData.startTime,
+          bookingData.endTime,
+          service.duration,
+        );
       }
 
       const booking = this.bookingsRepository.create(bookingData);

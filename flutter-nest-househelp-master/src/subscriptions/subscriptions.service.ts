@@ -10,6 +10,7 @@ import {
 import { ServiceProfilesService } from '../service-profiles/service-profiles.service';
 import { ServiceProfile, ServiceType } from '../service-profiles/entities/service-profile.entity';
 import { Booking, BookingStatus, BookingType, LocationData } from '../bookings/entities/booking.entity';
+import { BookingValidator } from '../bookings/booking-validator';
 import { SubscriptionWorkerSyncService } from '../subscriptions/subscription-worker-sync.service';
 import { Service } from '../services/entities/service.entity';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -225,6 +226,11 @@ export class SubscriptionsService implements OnApplicationBootstrap {
       this.logger.warn('No serviceId mapped - worker assignment may fail for these bookings');
     }
 
+    // Fetch mapped service to validate duration
+    const service = mappedServiceId
+      ? await this.dataSource.getRepository(Service).findOne({ where: { id: mappedServiceId } })
+      : null;
+
     // ✅ Generate 26 daily bookings UPFRONT immediately at purchase time (skipping Sundays)
     let generatedCount = 0;
     let dayOffset = 0;
@@ -272,6 +278,10 @@ export class SubscriptionsService implements OnApplicationBootstrap {
             isOtpVerified: false,
             notes: `Auto generated for subscription ${savedSubscription.id} - Day ${generatedCount + 1}${window.noteSuffix ? ' - ' + window.noteSuffix : ''}`,
           };
+
+          if (service) {
+            BookingValidator.validateDuration(window.startTime, window.endTime, service.duration);
+          }
 
           const booking = this.bookingsRepository.create(bookingData);
           await this.bookingsRepository.save(booking);
@@ -355,6 +365,10 @@ export class SubscriptionsService implements OnApplicationBootstrap {
         (subscription as any).customPlanData,
       );
   
+      const service = derivedServiceId
+        ? await this.dataSource.getRepository(Service).findOne({ where: { id: derivedServiceId } })
+        : null;
+
       let createdCount = 0;
       let generatedCount = 0;
       let dayOffset = 0;
@@ -404,6 +418,10 @@ export class SubscriptionsService implements OnApplicationBootstrap {
               notes: `Auto-generated for subscription ${subscriptionId} - Day ${generatedCount + 1}${window.noteSuffix ? ' - ' + window.noteSuffix : ''}`,
             };
       
+            if (service) {
+              BookingValidator.validateDuration(window.startTime, window.endTime, service.duration);
+            }
+
             const booking = this.bookingsRepository.create(bookingData);
             await this.bookingsRepository.save(booking);
             createdCount++;
@@ -533,6 +551,10 @@ export class SubscriptionsService implements OnApplicationBootstrap {
              subscription.serviceProfileId,
              (subscription as any).customPlanData,
            );
+
+           const service = derivedServiceId
+             ? await this.dataSource.getRepository(Service).findOne({ where: { id: derivedServiceId } })
+             : null;
  
            let generatedCount = existingBookings.length;
            let dayOffset = 0;
@@ -584,6 +606,10 @@ export class SubscriptionsService implements OnApplicationBootstrap {
                    notes: `Auto-generated for subscription ${subscription.id} - Day ${generatedCount + 1}${window.noteSuffix ? ' - ' + window.noteSuffix : ''}`,
                  };
  
+                 if (service) {
+                   BookingValidator.validateDuration(window.startTime, window.endTime, service.duration);
+                 }
+
                  const booking = this.bookingsRepository.create(bookingData);
                  await this.bookingsRepository.save(booking);
                  bookingsCreated++;

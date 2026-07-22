@@ -4,6 +4,16 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.21] - 2026-07-22
+
+### Added
+- **InvalidBookingDurationException**: Created custom exception to reject any booking with an invalid duration.
+- **Architectural Validation Layer**: Enforced strict validation before saving bookings `bookingEnd = bookingStart + serviceDuration`.
+
+### Fixed
+- **Service Request Conversion Time Window Bug**: Fixed timeWindow parser in `BookingsService` so that exact AM/PM range windows (e.g. `05:30 AM - 06:30 AM`) are parsed correctly instead of falling through to a default 4-hour legacy morning slot.
+- **Duration Validation Guard**: Integrated `BookingValidator.validateDuration` in `bookings.service.ts` and `subscriptions.service.ts` to block any invalid duration from ever hitting the database.
+
 ## [1.0.20] - 2026-07-22
 
 ### Fixed
