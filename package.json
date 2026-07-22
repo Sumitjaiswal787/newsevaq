@@ -9,7 +9,7 @@
     "uuid": "^13.0.0"
   },
   "name": "newsevaq",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "main": "add-missing-columns.js",
   "scripts": {
     "build": "cd flutter-nest-househelp-master && npm install --legacy-peer-deps --include=dev && rm -rf dist && rm -f *.tsbuildinfo && npm run build",

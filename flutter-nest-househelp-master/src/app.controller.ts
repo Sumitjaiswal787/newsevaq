@@ -27,25 +27,29 @@ export class AppController {
     const logs: string[] = [];
 
     try {
-      // Clear all child / related entities using raw SQL with correct singular/plural table names
+      // 1. Delete child entities referencing booking (review, payment)
       try { await this.dataSource.query('DELETE FROM "review"'); logs.push('✅ Deleted review'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "reviews"'); logs.push('✅ Deleted reviews'); } catch (err) {} }
       try { await this.dataSource.query('DELETE FROM "payment"'); logs.push('✅ Deleted payment'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "payments"'); logs.push('✅ Deleted payments'); } catch (e: any) {} }
-      try { await this.dataSource.query('DELETE FROM "service_request"'); logs.push('✅ Deleted service_request'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "service_requests"'); logs.push('✅ Deleted service_requests'); } catch (e: any) {} }
-      try { await this.dataSource.query('DELETE FROM "subscriptions"'); logs.push('✅ Deleted subscriptions'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "subscription"'); logs.push('✅ Deleted subscription'); } catch (e: any) {} }
-      try { await this.dataSource.query('DELETE FROM "worker_temporary_locks"'); logs.push('✅ Deleted worker_temporary_locks'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "worker_temporary_lock"'); logs.push('✅ Deleted worker_temporary_lock'); } catch (e: any) {} }
 
-      // Clear main booking entity
+      // 2. Delete booking table BEFORE subscriptions (to free FK constraint FK_93d402ee62f82980aa18a014eb3)
       try {
-        await this.dataSource.getRepository(Booking).clear();
-        logs.push('✅ Cleared booking table via TypeORM');
+        await this.dataSource.query('DELETE FROM "booking"');
+        logs.push('✅ Deleted from "booking" table');
       } catch (e: any) {
         try {
-          await this.dataSource.query('DELETE FROM "booking"');
-          logs.push('✅ Deleted from "booking" table');
+          await this.dataSource.getRepository(Booking).clear();
+          logs.push('✅ Cleared booking table via TypeORM');
         } catch (err: any) {
           logs.push(`❌ Booking clear error: ${err.message}`);
         }
       }
+
+      // 3. Delete subscriptions (now free of booking FK references)
+      try { await this.dataSource.query('DELETE FROM "subscriptions"'); logs.push('✅ Deleted subscriptions'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "subscription"'); logs.push('✅ Deleted subscription'); } catch (e: any) {} }
+
+      // 4. Delete worker temporary locks and service requests
+      try { await this.dataSource.query('DELETE FROM "worker_temporary_locks"'); logs.push('✅ Deleted worker_temporary_locks'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "worker_temporary_lock"'); logs.push('✅ Deleted worker_temporary_lock'); } catch (e: any) {} }
+      try { await this.dataSource.query('DELETE FROM "service_requests"'); logs.push('✅ Deleted service_requests'); } catch (e: any) { try { await this.dataSource.query('DELETE FROM "service_request"'); logs.push('✅ Deleted service_request'); } catch (e: any) {} }
 
       // Reset slot availability
       try {
