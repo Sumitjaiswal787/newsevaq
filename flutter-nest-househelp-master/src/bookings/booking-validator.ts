@@ -77,4 +77,27 @@ export class BookingValidator {
       address,
     };
   }
+
+  /**
+   * Validates that booking duration is strictly <= 120 minutes (or matching 60 minutes for subscriptions).
+   * Throws an exception if a shift duration (e.g. 6 hours) is attempted to be saved as booking endTime.
+   */
+  static validateDuration(startTimeStr: string, endTimeStr: string): void {
+    if (!startTimeStr || !endTimeStr) return;
+
+    const parseMinutes = (timeStr: string) => {
+      const parts = timeStr.split(':');
+      return parseInt(parts[0], 10) * 60 + parseInt(parts[1] || '0', 10);
+    };
+
+    const startMins = parseMinutes(startTimeStr);
+    const endMins = parseMinutes(endTimeStr);
+    const durationMinutes = endMins - startMins;
+
+    if (durationMinutes > 120) {
+      const errorMsg = `Invalid booking duration (${durationMinutes} minutes: ${startTimeStr} -> ${endTimeStr}). Shift window durations cannot be saved as booking endTime. Max allowed duration is 120 minutes.`;
+      this.logger.error(`❌ [PRE-SAVE GUARD ASSERTION FAILED]: ${errorMsg}`);
+      throw new Error(errorMsg);
+    }
+  }
 }

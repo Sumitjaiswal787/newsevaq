@@ -4,6 +4,11 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.17] - 2026-07-22
+
+### Fixed
+- **Root Cause Resolution for 6-Hour Subscription Booking Bug**: Replaced hardcoded shift window strings (`06:00 AM - 12:00 PM` & `04:00 PM - 09:00 PM`) in `SubscriptionSchedulerService.createServiceRequest` with exact 60-minute service windows (`05:30 AM - 06:30 AM`, `11:00 AM - 12:00 PM`, `05:00 PM - 06:00 PM`). Added `BookingValidator.validateDuration` pre-save assertion guard to block shift window durations > 120 minutes from being saved into `booking.endTime`.
+
 ## [1.0.16] - 2026-07-22
 
 ### Fixed

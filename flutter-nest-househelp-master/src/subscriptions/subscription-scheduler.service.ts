@@ -85,56 +85,86 @@ export class SubscriptionSchedulerService {
       if (isCooking && mealPlan) {
         const mealPlanStr = String(mealPlan).toUpperCase();
         
-        // 1. Breakfast, Lunch, or Breakfast+Lunch: one request from 6 AM to 12 PM
-        if (mealPlanStr === 'BF' || mealPlanStr === 'LUNCH' || mealPlanStr === 'BF_LUNCH') {
+        if (mealPlanStr === 'BF' || mealPlanStr === 'BF_LUNCH') {
           await this.serviceRequestsService.create(subscription.userId, {
             serviceProfileId: subscription.serviceProfileId,
             source: ServiceRequestSource.SUBSCRIPTION,
             date: date.toISOString().split('T')[0],
-            timeWindow: '06:00 AM - 12:00 PM',
+            timeWindow: '05:30 AM - 06:30 AM',
             priceSnapshot: subscription.monthlyPriceSnapshot / 30,
             location: subscription.location,
           });
-          this.logger.log(`Created Morning/Midday Cooking request (6 AM - 12 PM) for subscription ${subscription.id}`);
+          this.logger.log(`Created Morning Cooking request (5:30 AM - 6:30 AM) for subscription ${subscription.id}`);
           return;
         }
 
-        // 2. Dinner: one request after 4 PM (4 PM to 9 PM)
+        if (mealPlanStr === 'LUNCH') {
+          await this.serviceRequestsService.create(subscription.userId, {
+            serviceProfileId: subscription.serviceProfileId,
+            source: ServiceRequestSource.SUBSCRIPTION,
+            date: date.toISOString().split('T')[0],
+            timeWindow: '11:00 AM - 12:00 PM',
+            priceSnapshot: subscription.monthlyPriceSnapshot / 30,
+            location: subscription.location,
+          });
+          this.logger.log(`Created Lunch Cooking request (11:00 AM - 12:00 PM) for subscription ${subscription.id}`);
+          return;
+        }
+
         if (mealPlanStr === 'DINNER') {
           await this.serviceRequestsService.create(subscription.userId, {
             serviceProfileId: subscription.serviceProfileId,
             source: ServiceRequestSource.SUBSCRIPTION,
             date: date.toISOString().split('T')[0],
-            timeWindow: '04:00 PM - 09:00 PM',
+            timeWindow: '05:00 PM - 06:00 PM',
             priceSnapshot: subscription.monthlyPriceSnapshot / 30,
             location: subscription.location,
           });
-          this.logger.log(`Created Dinner Cooking request (after 4 PM) for subscription ${subscription.id}`);
+          this.logger.log(`Created Dinner Cooking request (5:00 PM - 6:00 PM) for subscription ${subscription.id}`);
           return;
         }
 
-        // 3. Lunch + Dinner or Full Day (Breakfast, Lunch, Dinner): two separate requests
-        if (mealPlanStr === 'LUNCH_DINNER' || mealPlanStr === 'FULL_DAY') {
-          // Morning/Midday request
+        if (mealPlanStr === 'LUNCH_DINNER') {
           await this.serviceRequestsService.create(subscription.userId, {
             serviceProfileId: subscription.serviceProfileId,
             source: ServiceRequestSource.SUBSCRIPTION,
             date: date.toISOString().split('T')[0],
-            timeWindow: '06:00 AM - 12:00 PM',
-            priceSnapshot: (subscription.monthlyPriceSnapshot / 30) / 2, // split daily cost
+            timeWindow: '11:00 AM - 12:00 PM',
+            priceSnapshot: (subscription.monthlyPriceSnapshot / 30) / 2,
             location: subscription.location,
           });
-          
-          // Dinner/Evening request
+
           await this.serviceRequestsService.create(subscription.userId, {
             serviceProfileId: subscription.serviceProfileId,
             source: ServiceRequestSource.SUBSCRIPTION,
             date: date.toISOString().split('T')[0],
-            timeWindow: '04:00 PM - 09:00 PM',
-            priceSnapshot: (subscription.monthlyPriceSnapshot / 30) / 2, // split daily cost
+            timeWindow: '05:00 PM - 06:00 PM',
+            priceSnapshot: (subscription.monthlyPriceSnapshot / 30) / 2,
             location: subscription.location,
           });
-          this.logger.log(`Created two Cooking requests (6 AM - 12 PM and 4 PM - 9 PM) for subscription ${subscription.id}`);
+          this.logger.log(`Created 2 Cooking requests (11 AM - 12 PM & 5 PM - 6 PM) for subscription ${subscription.id}`);
+          return;
+        }
+
+        if (mealPlanStr === 'FULL_DAY') {
+          await this.serviceRequestsService.create(subscription.userId, {
+            serviceProfileId: subscription.serviceProfileId,
+            source: ServiceRequestSource.SUBSCRIPTION,
+            date: date.toISOString().split('T')[0],
+            timeWindow: '05:30 AM - 06:30 AM',
+            priceSnapshot: (subscription.monthlyPriceSnapshot / 30) / 2,
+            location: subscription.location,
+          });
+
+          await this.serviceRequestsService.create(subscription.userId, {
+            serviceProfileId: subscription.serviceProfileId,
+            source: ServiceRequestSource.SUBSCRIPTION,
+            date: date.toISOString().split('T')[0],
+            timeWindow: '05:00 PM - 06:00 PM',
+            priceSnapshot: (subscription.monthlyPriceSnapshot / 30) / 2,
+            location: subscription.location,
+          });
+          this.logger.log(`Created 2 Cooking requests (5:30 AM - 6:30 AM & 5 PM - 6 PM) for subscription ${subscription.id}`);
           return;
         }
       }
