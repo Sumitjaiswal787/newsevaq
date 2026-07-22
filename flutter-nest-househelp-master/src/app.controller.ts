@@ -124,11 +124,11 @@ export class AppController {
   async debugSubscriptions() {
     try {
       const subs = await this.dataSource.query(`
-        SELECT id, "userId", "preferredTimeWindow", status, "custom_plan_data", "serviceProfileId", "monthlyPriceSnapshot"
+        SELECT id, "userId", preferredtimewindow, status, custom_plan_data, "serviceProfileId", "monthlyPriceSnapshot"
         FROM "subscriptions" ORDER BY id DESC LIMIT 10;
       `);
       const bookings = await this.dataSource.query(`
-        SELECT id, "subscriptionId", "startTime", "endTime", date, type, status
+        SELECT id, "subscriptionId", "startTime", "endTime", date, type, status, "createdAt"
         FROM "booking" WHERE type = 'subscription' ORDER BY "createdAt" DESC LIMIT 20;
       `);
       return { success: true, subscriptions: subs, recentSubscriptionBookings: bookings };
