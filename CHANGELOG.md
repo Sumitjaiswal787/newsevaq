@@ -4,6 +4,11 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.18] - 2026-07-22
+
+### Fixed
+- **Production Build Deployment**: Deployed updated NestJS backend container (v1.0.13) to Railway production environment containing subscription duration root cause fix, pre-save duration assertion guard, and foreign key purge ordering.
+
 ## [1.0.17] - 2026-07-22
 
 ### Fixed
