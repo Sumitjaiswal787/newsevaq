@@ -30,11 +30,10 @@ export class OnDemandAssignmentScheduler {
   private currentIntervalMs = 60 * 1000; // Start with 1 minute
   
   private readonly BACKOFF_LEVELS = [
-    60 * 1000,   // 1 minute
-    2 * 60 * 1000, // 2 minutes
-    5 * 60 * 1000, // 5 minutes
-    15 * 60 * 1000, // 15 minutes
-    30 * 60 * 1000, // 30 minutes (max)
+    5 * 1000,    // 5 seconds
+    10 * 1000,   // 10 seconds
+    15 * 1000,   // 15 seconds
+    30 * 1000,   // 30 seconds (max)
   ];
 
   constructor(
@@ -500,25 +499,13 @@ export class OnDemandAssignmentScheduler {
           const startParsed = parseTimeStr(String(booking.startTime));
           const endParsed = parseTimeStr(String(booking.endTime));
 
-          startTimeDate = new Date(
-            dateObj.getFullYear(),
-            dateObj.getMonth(),
-            dateObj.getDate(),
-            startParsed.hours,
-            startParsed.minutes,
-            0,
-            0
-          );
+          startTimeDate = new Date(dateObj);
+          startTimeDate.setUTCHours(startParsed.hours, startParsed.minutes, 0, 0);
+          startTimeDate.setMinutes(startTimeDate.getMinutes() - 330);
 
-          endTimeDate = new Date(
-            dateObj.getFullYear(),
-            dateObj.getMonth(),
-            dateObj.getDate(),
-            endParsed.hours,
-            endParsed.minutes,
-            0,
-            0
-          );
+          endTimeDate = new Date(dateObj);
+          endTimeDate.setUTCHours(endParsed.hours, endParsed.minutes, 0, 0);
+          endTimeDate.setMinutes(endTimeDate.getMinutes() - 330);
         } catch (err: any) {
           this.logger.error(`Error parsing booking times for slot lookup: ${err.message}`);
         }
