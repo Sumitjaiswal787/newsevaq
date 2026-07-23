@@ -7,10 +7,9 @@ This file documents all design system alignments, UI restyling, API integrations
 ## [1.0.22] - 2026-07-23
 
 ### Changed
-- **Database Restoration**: Temporarily exposed `seed-public` and `reset-workers-now` to restore production database, and subsequently reverted both endpoints to secure the environment.
+- **Database Restoration**: Temporarily exposed `seed-public`, `reset-workers-now`, and `clear-all-slots` to restore production database/slots, and subsequently reverted all temporary endpoints to secure the environment.
 - **Timezone-Aware Slots Query**: Adjusted date boundaries by subtracting 330 minutes (5.5 hours) in `SlotsService.findAvailableByDate` so that slot queries perfectly align with Asia/Kolkata (IST) calendar days instead of getting shifted on UTC production servers.
 - **IST-Aligned Slot Generation**: Modified `createStandardTimeSlots` in `daily-slot-generation.scheduler.ts` to calculate base dates and slot cycles using Asia/Kolkata (IST) timezone offsets, ensuring slots between 05:00 AM and 10:00 AM IST are generated correctly even when the server runs on a UTC timezone.
-- **Slots Cleaning Endpoint**: Added temporary `clear-all-slots` endpoint to clear existing slots to allow regeneration with the new timezone logic.
 
 ## [1.0.21] - 2026-07-22
 

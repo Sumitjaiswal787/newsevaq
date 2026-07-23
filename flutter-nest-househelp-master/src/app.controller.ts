@@ -203,15 +203,6 @@ export class AppController {
     return { message: 'Seeding complete', results };
   }
 
-  @Get('clear-all-slots')
-  async clearAllSlots() {
-    const ds = this.dataSource;
-    await ds.query(`SET session_replication_role = replica;`);
-    try { await ds.query(`TRUNCATE TABLE "slot" CASCADE;`); } catch(e) {}
-    await ds.query(`SET session_replication_role = DEFAULT;`);
-    return { success: true, message: 'All slots cleared successfully' };
-  }
-
   @Post('reset-production-database')
   @UseGuards(AdminGuard)
   async resetProductionDatabase() {
