@@ -8,6 +8,7 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ### Changed
 - **Public Seeding**: Exposed `seed-public` endpoint temporarily without guards to allow seeding the database on production.
+- **Workers Reset Endpoint**: Added temporary `reset-workers-now` endpoint to wipe workers, slots, and worker-users on production.
 
 ## [1.0.21] - 2026-07-22
 
