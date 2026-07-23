@@ -8,6 +8,7 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ### Changed
 - **Database Restoration**: Temporarily exposed `seed-public` and `reset-workers-now` to restore production database, and subsequently reverted both endpoints to secure the environment.
+- **Timezone-Aware Slots Query**: Adjusted date boundaries by subtracting 330 minutes (5.5 hours) in `SlotsService.findAvailableByDate` so that slot queries perfectly align with Asia/Kolkata (IST) calendar days instead of getting shifted on UTC production servers.
 
 ## [1.0.21] - 2026-07-22
 

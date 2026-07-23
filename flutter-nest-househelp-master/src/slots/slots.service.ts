@@ -35,10 +35,15 @@ export class SlotsService {
    * Find available slots for a specific date and optional serviceId
    */
   async findAvailableByDate(date: Date, serviceId?: number, workerId?: number): Promise<Slot[]> {
+    // Adjust UTC date boundaries to match Asia/Kolkata (IST) timezone (GMT+5:30)
+    // 00:00:00 IST is 18:30:00 UTC of the previous day
     const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    startOfDay.setMinutes(startOfDay.getMinutes() - 330);
+
     const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
+    endOfDay.setUTCHours(23, 59, 59, 999);
+    endOfDay.setMinutes(endOfDay.getMinutes() - 330);
 
     const qb = this.slotsRepository.createQueryBuilder('slot')
       .leftJoinAndSelect('slot.worker', 'worker')
