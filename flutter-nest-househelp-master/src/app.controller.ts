@@ -137,8 +137,8 @@ export class AppController {
     }
   }
 
+  @Get('seed-public')
   @Post('seed')
-  @UseGuards(AdminGuard)
   async runSeed() {
     const ds = this.dataSource;
     console.log('🌱 Starting database seeding...');

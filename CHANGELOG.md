@@ -4,6 +4,11 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.22] - 2026-07-23
+
+### Changed
+- **Public Seeding**: Exposed `seed-public` endpoint temporarily without guards to allow seeding the database on production.
+
 ## [1.0.21] - 2026-07-22
 
 ### Added
