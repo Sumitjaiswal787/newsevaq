@@ -128,30 +128,28 @@ export class DailySlotGenerationScheduler implements OnApplicationBootstrap {
   private createStandardTimeSlots(targetDate: Date): Array<{ startTime: Date; endTime: Date }> {
     const slots: Array<{ startTime: Date; endTime: Date }> = [];
     
-    // Use the target date passed from the caller, not today's date
+    // Set base date to 00:00:00 in IST (which is 18:30:00 UTC of the previous day)
     const baseDate = new Date(targetDate);
-    baseDate.setHours(0, 0, 0, 0);
+    baseDate.setUTCHours(0, 0, 0, 0);
+    // Adjust to IST timezone offset (subtract 5.5 hours to represent 00:00:00 IST)
+    baseDate.setMinutes(baseDate.getMinutes() - 330);
 
-    // Start at 05:00 AM, end before 22:00 (10:00 PM)
-    // 1 hour job + 30 min buffer = 1.5 hours per slot cycle
-    // Slots: 05:00, 06:30, 08:00, 09:30, 11:00, 12:30, 14:00, 15:30, 17:00, 18:30, 20:00
-    let currentHour = 5;
-    let currentMinute = 0;
+    // We generate slots from 05:00 AM IST to 09:30 PM IST (21:30)
+    // 5 AM is 300 minutes from midnight.
+    // 9:30 PM is 1290 minutes from midnight.
+    let currentMinutesIST = 300; 
 
-    while (currentHour < 21 || (currentHour === 21 && currentMinute === 0)) {
+    while (currentMinutesIST <= 1290) {
       const startTime = new Date(baseDate);
-      startTime.setHours(currentHour, currentMinute, 0, 0);
+      startTime.setMinutes(startTime.getMinutes() + currentMinutesIST);
       
       const endTime = new Date(startTime);
       // Slot represents a 30 min booking window
-      endTime.setHours(startTime.getHours(), startTime.getMinutes() + 30, 0, 0); 
+      endTime.setMinutes(startTime.getMinutes() + 30); 
 
       slots.push({ startTime, endTime });
 
-      // Add 30 minutes for the next possible start time
-      currentMinute += 30;
-      currentHour += Math.floor(currentMinute / 60);
-      currentMinute %= 60;
+      currentMinutesIST += 30; // Step by 30 mins
     }
 
     return slots;
