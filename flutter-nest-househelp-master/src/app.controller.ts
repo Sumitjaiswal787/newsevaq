@@ -137,8 +137,8 @@ export class AppController {
     }
   }
 
-  @Get('seed-public')
   @Post('seed')
+  @UseGuards(AdminGuard)
   async runSeed() {
     const ds = this.dataSource;
     console.log('🌱 Starting database seeding...');
@@ -201,17 +201,6 @@ export class AppController {
 
     console.log('🌱 Seeding complete:', results);
     return { message: 'Seeding complete', results };
-  }
-
-  @Get('reset-workers-now')
-  async resetWorkersNow() {
-    const ds = this.dataSource;
-    await ds.query(`SET session_replication_role = replica;`);
-    try { await ds.query(`TRUNCATE TABLE "slot" CASCADE;`); } catch(e) {}
-    try { await ds.query(`TRUNCATE TABLE "worker" CASCADE;`); } catch(e) {}
-    try { await ds.query(`DELETE FROM "user" WHERE role = 'worker';`); } catch(e) {}
-    await ds.query(`SET session_replication_role = DEFAULT;`);
-    return { success: true, message: 'Workers, slots, and worker users deleted successfully' };
   }
 
   @Post('reset-production-database')
