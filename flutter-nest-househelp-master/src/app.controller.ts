@@ -203,6 +203,38 @@ export class AppController {
     return { message: 'Seeding complete', results };
   }
 
+  @Get('assignment-diagnostics')
+  async getAssignmentDiagnostics() {
+    const ds = this.dataSource;
+    const bookings = await ds.query(`
+      SELECT id, status, type, "userId", "workerId", "serviceId", "slotId", date, "startTime", "endTime", "assignmentState", "assignmentReason", "createdAt"
+      FROM booking
+      ORDER BY "createdAt" DESC
+      LIMIT 10
+    `);
+    const serviceRequests = await ds.query(`
+      SELECT id, status, "userId", "serviceProfileId", date, "timeWindow", "createdAt"
+      FROM service_request
+      ORDER BY "createdAt" DESC
+      LIMIT 10
+    `);
+    const subscriptions = await ds.query(`
+      SELECT id, status, "userId", "serviceProfileId", "startDate", "endDate", "frequency", "customPlanData"
+      FROM subscription
+      ORDER BY "createdAt" DESC
+      LIMIT 10
+    `);
+    const workersCount = await ds.query(`SELECT COUNT(*) FROM worker`);
+    const slotsCount = await ds.query(`SELECT COUNT(*) FROM slot`);
+    return {
+      bookings,
+      serviceRequests,
+      subscriptions,
+      workersCount,
+      slotsCount
+    };
+  }
+
   @Post('reset-production-database')
   @UseGuards(AdminGuard)
   async resetProductionDatabase() {
