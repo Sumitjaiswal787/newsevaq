@@ -11,6 +11,7 @@ import { DataSource } from 'typeorm';
 import { AdminGuard } from './auth/admin.guard';
 import { Booking } from './bookings/entities/booking.entity';
 import { Slot } from './slots/entities/slot.entity';
+import { SubscriptionsService } from './subscriptions/subscriptions.service';
 
 @Controller()
 export class AppController {
@@ -18,6 +19,7 @@ export class AppController {
     private readonly appService: AppService,
     private readonly healthService: HealthService,
     @Inject(DataSource) private readonly dataSource: DataSource,
+    private readonly subscriptionsService: SubscriptionsService,
   ) {}
 
   @Get('purge-all-bookings-now')
@@ -307,6 +309,16 @@ export class AppController {
       workersCount,
       slotsCount
     };
+  }
+
+  @Get('trigger-bookings-gen')
+  async triggerBookingsGen() {
+    try {
+      await this.subscriptionsService.generateBookingsForSubscription(11, new Date('2026-07-25'));
+      return { success: true, message: 'Bookings generation triggered successfully' };
+    } catch (e: any) {
+      return { success: false, error: e.message, stack: e.stack };
+    }
   }
 
   @Post('reset-production-database')
