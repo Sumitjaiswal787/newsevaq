@@ -223,7 +223,7 @@ export class AppController {
     let serviceRequests = [];
     try {
       serviceRequests = await ds.query(`
-        SELECT id, status, "userId", "serviceProfileId", date, "timeWindow", "createdAt"
+        SELECT id, "assignmentStatus" AS status, "userId", "serviceProfileId", date, "timeWindow", "createdAt"
         FROM service_requests
         ORDER BY "createdAt" DESC
         LIMIT 10
@@ -235,7 +235,7 @@ export class AppController {
     let subscriptions = [];
     try {
       subscriptions = await ds.query(`
-        SELECT id, status, "userId", "serviceProfileId", "startDate", "endDate", "frequency", "customPlanData"
+        SELECT id, status, "userId", "serviceProfileId", "startDate", "endDate", "preferredtimewindow" AS "preferredTimeWindow", "custom_plan_data" AS "customPlanData"
         FROM subscriptions
         ORDER BY "createdAt" DESC
         LIMIT 10
