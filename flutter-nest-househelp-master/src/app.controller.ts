@@ -282,4 +282,18 @@ export class AppController {
       return { message: 'Error updating locations', error: e.message };
     }
   }
+  @Get('dump-bookings')
+  async dumpBookings() {
+    const ds = this.dataSource;
+    try {
+      const bookings = await ds.query(`
+        SELECT id, "startTime", "endTime", "date", notes, type, "workerId", "assignedWorkerId"
+        FROM booking 
+        ORDER BY "date" ASC
+      `);
+      return { success: true, bookings };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  }
 }
