@@ -282,4 +282,39 @@ export class AppController {
       return { message: 'Error updating locations', error: e.message };
     }
   }
+
+  @Get('check-workers-slots')
+  async checkWorkersSlots() {
+    const ds = this.dataSource;
+    try {
+      const workers = await ds.query(`
+        SELECT w.id, u.email, u."firstName", u."lastName", w."isActive", w."isAvailable"
+        FROM worker w 
+        JOIN "user" u ON w.user_id = u.id
+      `);
+
+      const slotsToday = await ds.query(`
+        SELECT "workerId", COUNT(*) as count 
+        FROM slot 
+        WHERE date = '2026-07-24' 
+        GROUP BY "workerId"
+      `);
+
+      const slotsTomorrow = await ds.query(`
+        SELECT "workerId", COUNT(*) as count 
+        FROM slot 
+        WHERE date = '2026-07-25' 
+        GROUP BY "workerId"
+      `);
+
+      return {
+        success: true,
+        workers,
+        slotsToday,
+        slotsTomorrow
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  }
 }
