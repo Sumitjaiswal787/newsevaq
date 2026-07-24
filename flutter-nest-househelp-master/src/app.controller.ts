@@ -270,18 +270,12 @@ export class AppController {
       errors.users = e.message;
     }
 
-    let workerLocks = [];
-    try {
-      // WorkerTemporaryLock is a frontend lock, but let's clear error tracking for it
-    } catch (e: any) {}
-
     return {
       errors,
       bookings,
       serviceRequests,
       subscriptions,
       users,
-      workerLocks,
       workersCount,
       slotsCount
     };
