@@ -288,9 +288,11 @@ export class AppController {
     const ds = this.dataSource;
     try {
       const bookings = await ds.query(`
-        SELECT id, "startTime", "endTime", "date", notes, type 
-        FROM booking 
-        ORDER BY "date" DESC 
+        SELECT b.id, b."startTime", b."endTime", b."date", b.notes, b.type, b."slotId",
+               s."startTime" as "slotStartTime", s."endTime" as "slotEndTime"
+        FROM booking b
+        LEFT JOIN slot s ON b."slotId" = s.id
+        ORDER BY b."date" DESC 
         LIMIT 10
       `);
       return { success: true, bookings };
