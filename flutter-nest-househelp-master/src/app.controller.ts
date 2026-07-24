@@ -282,21 +282,4 @@ export class AppController {
       return { message: 'Error updating locations', error: e.message };
     }
   }
-
-  @Get('dump-bookings')
-  async dumpBookings() {
-    const ds = this.dataSource;
-    try {
-      const bookings = await ds.query(`
-        SELECT b.id, b."startTime", b."endTime", b."date", b.notes, b.type, b."slotId",
-               s."startTime" as "slotStartTime", s."endTime" as "slotEndTime"
-        FROM booking b
-        LEFT JOIN slot s ON b."slotId" = s.id
-        ORDER BY b."date" ASC
-      `);
-      return { success: true, bookings };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  }
 }

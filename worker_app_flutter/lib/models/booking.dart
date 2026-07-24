@@ -200,8 +200,8 @@ class Booking {
     // Parse nested slot object for time info
     final slotData = _parseNestedObject(json['slot']);
     String startTime = _safeString(
-        slotData?['startTime'] ?? json['startTime'] ?? json['time']);
-    String? endTime = _safeString(slotData?['endTime'] ?? json['endTime']);
+        json['startTime'] ?? slotData?['startTime'] ?? json['time']);
+    String? endTime = _safeString(json['endTime'] ?? slotData?['endTime']);
     if (endTime.isEmpty) {
       endTime = null;
     }
