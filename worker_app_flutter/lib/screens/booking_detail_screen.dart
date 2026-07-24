@@ -203,8 +203,17 @@ class WorkerBookingDetailScreen extends StatelessWidget {
 
   String _formatTime(String timeStr) {
     try {
+      if (timeStr.contains('T')) {
+        final timePart = timeStr.split('T')[1];
+        final parts = timePart.split(':');
+        if (parts.length >= 2) {
+          int h = int.tryParse(parts[0]) ?? 0;
+          int m = int.tryParse(parts[1]) ?? 0;
+          return DateFormat.jm().format(DateTime(2020, 1, 1, h, m));
+        }
+      }
       final dt = DateTime.parse(timeStr);
-      return DateFormat.jm().format(dt.toLocal());
+      return DateFormat.jm().format(dt.toUtc());
     } catch (e) {
       if (timeStr.contains(':')) {
         final parts = timeStr.split(':');
