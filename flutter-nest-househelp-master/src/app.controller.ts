@@ -282,4 +282,75 @@ export class AppController {
       return { message: 'Error updating locations', error: e.message };
     }
   }
+
+  @Get('delete-other-workers')
+  async deleteOtherWorkers() {
+    const ds = this.dataSource;
+    const logs = [];
+    try {
+      // Find all workers other than worker 19 (Suvam)
+      const otherWorkers = await ds.query(`SELECT id, "user_id" FROM worker WHERE id != 19`) as any[];
+      const otherWorkerIds = otherWorkers.map(w => w.id);
+      const otherUserIds = otherWorkers.map(w => w.user_id).filter(Boolean);
+
+      logs.push(`Found other workers to delete: ${otherWorkerIds.join(', ')}`);
+      logs.push(`Found corresponding user IDs: ${otherUserIds.join(', ')}`);
+
+      if (otherWorkerIds.length > 0) {
+        // 1. Delete from slot
+        try {
+          const res = await ds.query(`DELETE FROM slot WHERE "workerId" IN (${otherWorkerIds.join(',')})`);
+          logs.push(`✅ Deleted slots: ${res[1] || res.rowCount || 0}`);
+        } catch (e: any) {
+          logs.push(`❌ Delete slots error: ${e.message}`);
+        }
+
+        // 2. Delete from worker_leaves
+        try {
+          const res = await ds.query(`DELETE FROM worker_leaves WHERE "worker_id" IN (${otherWorkerIds.join(',')})`);
+          logs.push(`✅ Deleted worker leaves: ${res[1] || res.rowCount || 0}`);
+        } catch (e: any) {
+          logs.push(`❌ Delete leaves error: ${e.message}`);
+        }
+
+        // 3. Delete from service_worker
+        try {
+          const res = await ds.query(`DELETE FROM service_worker WHERE "worker_id" IN (${otherWorkerIds.join(',')})`);
+          logs.push(`✅ Deleted service_worker mappings: ${res[1] || res.rowCount || 0}`);
+        } catch (e: any) {
+          logs.push(`❌ Delete service_worker error: ${e.message}`);
+        }
+
+        // 4. Update bookings to free other workers
+        try {
+          const res = await ds.query(`UPDATE booking SET "workerId" = NULL, "assignmentState" = 'pending' WHERE "workerId" IN (${otherWorkerIds.join(',')})`);
+          logs.push(`✅ Cleared workerId from bookings: ${res[1] || res.rowCount || 0}`);
+        } catch (e: any) {
+          logs.push(`❌ Update bookings error: ${e.message}`);
+        }
+
+        // 5. Delete from worker table
+        try {
+          const res = await ds.query(`DELETE FROM worker WHERE id != 19`);
+          logs.push(`✅ Deleted workers: ${res[1] || res.rowCount || 0}`);
+        } catch (e: any) {
+          logs.push(`❌ Delete worker error: ${e.message}`);
+        }
+      }
+
+      if (otherUserIds.length > 0) {
+        // 6. Delete users (role = 'worker')
+        try {
+          const res = await ds.query(`DELETE FROM "user" WHERE id IN (${otherUserIds.join(',')}) AND role = 'worker'`);
+          logs.push(`✅ Deleted worker users: ${res[1] || res.rowCount || 0}`);
+        } catch (e: any) {
+          logs.push(`❌ Delete worker users error: ${e.message}`);
+        }
+      }
+
+      return { success: true, logs };
+    } catch (error: any) {
+      return { success: false, error: error.message, stack: error.stack, logs };
+    }
+  }
 }
