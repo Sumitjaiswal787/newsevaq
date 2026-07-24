@@ -4,6 +4,13 @@ This file documents all design system alignments, UI restyling, API integrations
 
 ---
 
+## [1.0.23] - 2026-07-24
+
+### Fixed
+- **Duration-Based Slot Availability**: Refactored `SlotsService.findAvailableByDate` to load the requested service's duration (clamping to max 2 hours) and filter available slots. A slot is only returned if there are enough consecutive free slots to satisfy the entire duration.
+- **Booking Overlap Verification**: Implemented active booking overlap checks in both `findAvailableByDate` (for available slots list) and `findAvailableSlotFlexible` (for flexible worker checkout) using the canonical interval overlap formula (`existStart < reqEnd AND existEnd > reqStart`).
+- **Worker App Booking Duration Display**: Prioritized the booking's own `startTime` and `endTime` fields over availability slot bounds to ensure the worker app displays the correct service duration (e.g. 1 hour instead of 30 minutes).
+
 ## [1.0.22] - 2026-07-23
 
 ### Changed
