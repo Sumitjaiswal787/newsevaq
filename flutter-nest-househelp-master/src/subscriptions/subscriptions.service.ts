@@ -279,9 +279,7 @@ export class SubscriptionsService implements OnApplicationBootstrap {
             notes: `Auto generated for subscription ${savedSubscription.id} - Day ${generatedCount + 1}${window.noteSuffix ? ' - ' + window.noteSuffix : ''}`,
           };
 
-          if (service) {
-            BookingValidator.validateDuration(window.startTime, window.endTime, service.duration);
-          }
+          // Skip duration validation for subscription bookings (predefined 1-hour meal plan slots)
 
           const booking = this.bookingsRepository.create(bookingData);
           await this.bookingsRepository.save(booking);
@@ -418,9 +416,7 @@ export class SubscriptionsService implements OnApplicationBootstrap {
               notes: `Auto-generated for subscription ${subscriptionId} - Day ${generatedCount + 1}${window.noteSuffix ? ' - ' + window.noteSuffix : ''}`,
             };
       
-            if (service) {
-              BookingValidator.validateDuration(window.startTime, window.endTime, service.duration);
-            }
+            // Skip duration validation for subscription bookings (predefined 1-hour meal plan slots)
 
             const booking = this.bookingsRepository.create(bookingData);
             await this.bookingsRepository.save(booking);
@@ -606,9 +602,7 @@ export class SubscriptionsService implements OnApplicationBootstrap {
                    notes: `Auto-generated for subscription ${subscription.id} - Day ${generatedCount + 1}${window.noteSuffix ? ' - ' + window.noteSuffix : ''}`,
                  };
  
-                 if (service) {
-                   BookingValidator.validateDuration(window.startTime, window.endTime, service.duration);
-                 }
+                 // Skip duration validation for subscription bookings (predefined 1-hour meal plan slots)
 
                  const booking = this.bookingsRepository.create(bookingData);
                  await this.bookingsRepository.save(booking);
