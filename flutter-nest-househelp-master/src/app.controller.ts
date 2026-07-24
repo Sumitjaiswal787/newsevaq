@@ -235,13 +235,28 @@ export class AppController {
     let subscriptions = [];
     try {
       subscriptions = await ds.query(`
-        SELECT id, status, "userId", "serviceProfileId", "startDate", "endDate", "preferredtimewindow" AS "preferredTimeWindow", "custom_plan_data" AS "customPlanData"
+        SELECT id, status, "userId", "serviceProfileId", "startDate", "endDate", "preferredtimewindow" AS "preferredTimeWindow", "custom_plan_data" AS "customPlanData", location
         FROM subscriptions
         ORDER BY "createdAt" DESC
         LIMIT 10
       `);
     } catch (e: any) {
       errors.subscriptions = e.message;
+    }
+
+    let subscriber = null;
+    try {
+      if (subscriptions.length > 0) {
+        const sub = subscriptions[0];
+        const res = await ds.query(`
+          SELECT id, role, email, phone, "firstName", "lastName", "publicId"
+          FROM "user"
+          WHERE "publicId"::text = '${sub.userId}'
+        `);
+        subscriber = res[0] || null;
+      }
+    } catch (e: any) {
+      errors.subscriber = e.message;
     }
 
     let workersCount = [];
@@ -287,6 +302,7 @@ export class AppController {
       bookings,
       serviceRequests,
       subscriptions,
+      subscriber,
       users,
       workersCount,
       slotsCount
