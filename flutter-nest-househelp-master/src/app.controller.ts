@@ -258,11 +258,37 @@ export class AppController {
       errors.slots = e.message;
     }
 
+    let users = [];
+    try {
+      users = await ds.query(`
+        SELECT id, role, email, phone, "firstName", "lastName", "createdAt"
+        FROM "user"
+        ORDER BY "createdAt" DESC
+        LIMIT 10
+      `);
+    } catch (e: any) {
+      errors.users = e.message;
+    }
+
+    let workerLocks = [];
+    try {
+      workerLocks = await ds.query(`
+        SELECT *
+        FROM "worker_temporary_lock"
+        ORDER BY "createdAt" DESC
+        LIMIT 10
+      `);
+    } catch (e: any) {
+      errors.workerLocks = e.message;
+    }
+
     return {
       errors,
       bookings,
       serviceRequests,
       subscriptions,
+      users,
+      workerLocks,
       workersCount,
       slotsCount
     };
