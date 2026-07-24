@@ -142,7 +142,7 @@ export class SlotsService {
       const workerBookings = bookingsByWorker.get(wId) || [];
       for (const b of workerBookings) {
         const existStart = parseTimeToHours(b.startTime);
-        const existEnd = parseTimeToHours(b.endTime);
+        const existEnd = parseTimeToHours(b.endTime) + 0.5; // 30-minute buffer after
         if (existStart < reqEnd && existEnd > reqStart) {
           return false;
         }
@@ -294,7 +294,7 @@ export class SlotsService {
         // Check 1: Booking Overlaps
         for (const b of activeBookings) {
           const existStart = parseTimeToHours(b.startTime);
-          const existEnd = parseTimeToHours(b.endTime);
+          const existEnd = parseTimeToHours(b.endTime) + 0.5; // 30-minute buffer after
           if (existStart < reqEnd && existEnd > reqStart) {
             return false;
           }

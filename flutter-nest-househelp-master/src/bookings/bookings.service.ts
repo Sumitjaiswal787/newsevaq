@@ -307,7 +307,7 @@ export class BookingsService implements OnApplicationBootstrap {
       const workerBookings = bookingsByWorker.get(worker.id) || [];
       for (const existing of workerBookings) {
         const existStart = parseTimeToHours(existing.startTime);
-        const existEnd = parseTimeToHours(existing.endTime);
+        const existEnd = parseTimeToHours(existing.endTime) + 0.5; // 30-minute buffer after
         // Strict overlap: if existing starts before new ends AND existing ends after new starts
         if (existStart < reqEnd && existEnd > reqStart) {
           this.logger.log(
