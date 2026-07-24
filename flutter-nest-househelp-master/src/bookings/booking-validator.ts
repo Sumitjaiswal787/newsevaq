@@ -88,6 +88,7 @@ export class BookingValidator {
     serviceDurationMinutes: number,
   ): void {
     if (!startTimeStr || !endTimeStr) return;
+    if (!serviceDurationMinutes) return;
 
     const parseMinutes = (timeStr: string) => {
       const parts = timeStr.split(':');

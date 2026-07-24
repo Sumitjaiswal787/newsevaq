@@ -11,6 +11,7 @@ This file documents all design system alignments, UI restyling, API integrations
 - **Timezone-Aware Slots Query**: Adjusted date boundaries by subtracting 330 minutes (5.5 hours) in `SlotsService.findAvailableByDate` so that slot queries perfectly align with Asia/Kolkata (IST) calendar days instead of getting shifted on UTC production servers.
 - **IST-Aligned Slot Generation**: Modified `createStandardTimeSlots` in `daily-slot-generation.scheduler.ts` to calculate base dates and slot cycles using Asia/Kolkata (IST) timezone offsets, ensuring slots between 05:00 AM and 10:00 AM IST are generated correctly even when the server runs on a UTC timezone.
 - **Immediate Worker Assignment**: Reduced maximum backoff in `OnDemandAssignmentScheduler` from 30 minutes to 30 seconds (starting at 5 seconds) to ensure near-instantaneous worker assignment. Fixed timezone parsing for `startTimeDate`/`endTimeDate` in `assignWorkerForBooking` to align with the IST timezone of database slots.
+- **Booking Duration Validation Guard**: Added a guard in `BookingValidator.validateDuration` to skip validation when a service has no configured duration (e.g. Cooking Service), preventing errors that aborted booking generation for paid subscriptions.
 
 ## [1.0.21] - 2026-07-22
 
