@@ -292,8 +292,7 @@ export class AppController {
                s."startTime" as "slotStartTime", s."endTime" as "slotEndTime"
         FROM booking b
         LEFT JOIN slot s ON b."slotId" = s.id
-        ORDER BY b."date" DESC 
-        LIMIT 10
+        ORDER BY b."date" ASC
       `);
       return { success: true, bookings };
     } catch (e: any) {

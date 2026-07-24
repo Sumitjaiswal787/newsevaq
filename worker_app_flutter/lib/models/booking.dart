@@ -201,9 +201,10 @@ class Booking {
     final slotData = _parseNestedObject(json['slot']);
     String startTime = _safeString(
         slotData?['startTime'] ?? json['startTime'] ?? json['time']);
-    String? endTime = slotData != null
-        ? _safeString(slotData['endTime'] ?? json['endTime'])
-        : null;
+    String? endTime = _safeString(slotData?['endTime'] ?? json['endTime']);
+    if (endTime.isEmpty) {
+      endTime = null;
+    }
 
     // Handle time value if present
     if (slotData != null && slotData['timeValue'] != null) {
