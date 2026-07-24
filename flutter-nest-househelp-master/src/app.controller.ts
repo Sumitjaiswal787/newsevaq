@@ -270,8 +270,20 @@ export class AppController {
       errors.users = e.message;
     }
 
+    let tables = [];
+    try {
+      tables = await ds.query(`
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema='public'
+      `);
+    } catch (e: any) {
+      errors.tables = e.message;
+    }
+
     return {
       errors,
+      tables,
       bookings,
       serviceRequests,
       subscriptions,
