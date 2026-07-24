@@ -12,6 +12,7 @@ import { AdminGuard } from './auth/admin.guard';
 import { Booking } from './bookings/entities/booking.entity';
 import { Slot } from './slots/entities/slot.entity';
 import { SubscriptionsService } from './subscriptions/subscriptions.service';
+import { OnDemandAssignmentScheduler } from './subscriptions/on-demand-assignment.scheduler';
 
 @Controller()
 export class AppController {
@@ -20,6 +21,7 @@ export class AppController {
     private readonly healthService: HealthService,
     @Inject(DataSource) private readonly dataSource: DataSource,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly onDemandAssignmentScheduler: OnDemandAssignmentScheduler,
   ) {}
 
   @Get('purge-all-bookings-now')
@@ -320,7 +322,15 @@ export class AppController {
       return { success: false, error: e.message, stack: e.stack };
     }
   }
-
+  @Get('trigger-assignment')
+  async triggerAssignment() {
+    try {
+      await this.onDemandAssignmentScheduler.handleOnDemandAssignments();
+      return { success: true, message: 'Assignment scheduler triggered successfully' };
+    } catch (e: any) {
+      return { success: false, error: e.message, stack: e.stack };
+    }
+  }
   @Post('reset-production-database')
   @UseGuards(AdminGuard)
   async resetProductionDatabase() {
