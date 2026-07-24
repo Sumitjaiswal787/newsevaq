@@ -288,7 +288,7 @@ export class AppController {
     const ds = this.dataSource;
     try {
       const bookings = await ds.query(`
-        SELECT id, "startTime", "endTime", "scheduledDate", "date", notes, type 
+        SELECT id, "startTime", "endTime", "date", notes, type 
         FROM booking 
         ORDER BY "date" DESC 
         LIMIT 10
