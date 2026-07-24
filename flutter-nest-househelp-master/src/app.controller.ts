@@ -206,27 +206,60 @@ export class AppController {
   @Get('assignment-diagnostics')
   async getAssignmentDiagnostics() {
     const ds = this.dataSource;
-    const bookings = await ds.query(`
-      SELECT id, status, type, "userId", "workerId", "serviceId", "slotId", date, "startTime", "endTime", "assignmentState", "assignmentReason", "createdAt"
-      FROM booking
-      ORDER BY "createdAt" DESC
-      LIMIT 10
-    `);
-    const serviceRequests = await ds.query(`
-      SELECT id, status, "userId", "serviceProfileId", date, "timeWindow", "createdAt"
-      FROM service_request
-      ORDER BY "createdAt" DESC
-      LIMIT 10
-    `);
-    const subscriptions = await ds.query(`
-      SELECT id, status, "userId", "serviceProfileId", "startDate", "endDate", "frequency", "customPlanData"
-      FROM subscription
-      ORDER BY "createdAt" DESC
-      LIMIT 10
-    `);
-    const workersCount = await ds.query(`SELECT COUNT(*) FROM worker`);
-    const slotsCount = await ds.query(`SELECT COUNT(*) FROM slot`);
+    const errors: any = {};
+    
+    let bookings = [];
+    try {
+      bookings = await ds.query(`
+        SELECT id, status, type, "userId", "workerId", "serviceId", "slotId", date, "startTime", "endTime", "assignmentState", "assignmentReason", "createdAt"
+        FROM booking
+        ORDER BY "createdAt" DESC
+        LIMIT 10
+      `);
+    } catch (e: any) {
+      errors.bookings = e.message;
+    }
+
+    let serviceRequests = [];
+    try {
+      serviceRequests = await ds.query(`
+        SELECT id, status, "userId", "serviceProfileId", date, "timeWindow", "createdAt"
+        FROM service_request
+        ORDER BY "createdAt" DESC
+        LIMIT 10
+      `);
+    } catch (e: any) {
+      errors.serviceRequests = e.message;
+    }
+
+    let subscriptions = [];
+    try {
+      subscriptions = await ds.query(`
+        SELECT id, status, "userId", "serviceProfileId", "startDate", "endDate", "frequency", "customPlanData"
+        FROM subscription
+        ORDER BY "createdAt" DESC
+        LIMIT 10
+      `);
+    } catch (e: any) {
+      errors.subscriptions = e.message;
+    }
+
+    let workersCount = [];
+    try {
+      workersCount = await ds.query(`SELECT COUNT(*) FROM worker`);
+    } catch (e: any) {
+      errors.workers = e.message;
+    }
+
+    let slotsCount = [];
+    try {
+      slotsCount = await ds.query(`SELECT COUNT(*) FROM slot`);
+    } catch (e: any) {
+      errors.slots = e.message;
+    }
+
     return {
+      errors,
       bookings,
       serviceRequests,
       subscriptions,
