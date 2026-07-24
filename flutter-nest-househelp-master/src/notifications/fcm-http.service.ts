@@ -23,6 +23,9 @@ export class FcmHttpService {
     try {
       const accessToken = await this.getAccessToken();
       
+      const channelId = data?.channel_id || 'default';
+      const soundName = data?.sound || 'default';
+
       const payload = {
         message: {
           token,
@@ -34,15 +37,15 @@ export class FcmHttpService {
           android: {
             priority: 'high',
             notification: {
-              channel_id: 'default',
+              channel_id: channelId,
               notification_priority: 'PRIORITY_MAX',
-              sound: 'default'
+              sound: soundName
             }
           },
           apns: {
             payload: {
               aps: {
-                sound: 'default',
+                sound: soundName,
                 contentAvailable: true
               }
             }

@@ -23,5 +23,17 @@ export class NotificationsScheduler {
     } catch (error) {
       this.logger.error('❌ Pre-service reminder check FAILED COMPLETELY', error);
     }
+
+    this.logger.log('Checking for worker 20-minute reminders to send');
+    try {
+      const workerResult = await this.notificationsService.checkAndSendWorkerReminders();
+      if (workerResult.success) {
+        this.logger.log(`✅ Worker reminder check completed successfully. Processed ${workerResult.processed} bookings, sent ${workerResult.sent} reminders`);
+      } else {
+        this.logger.warn(`⚠️ Worker reminder check completed with errors. ${workerResult.errors} errors occurred`);
+      }
+    } catch (error) {
+      this.logger.error('❌ Worker reminder check FAILED COMPLETELY', error);
+    }
   }
 }

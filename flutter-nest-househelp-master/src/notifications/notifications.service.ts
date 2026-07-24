@@ -381,6 +381,8 @@ export class NotificationsService {
         id: '1',
         status: 'done',
         fullScreen: 'true',
+        sound: 'rapido_alert',
+        channel_id: 'full_screen_booking_channel',
       });
 
       if (success) {
@@ -670,6 +672,99 @@ export class NotificationsService {
       this.logger.error('Fatal failure in pre-service reminder check', globalError);
       throw globalError; // Re-throw so scheduler knows about complete failure
     }
+  }
+
+  async checkAndSendWorkerReminders(): Promise<{ success: boolean, processed: number, sent: number, errors: number }> {
+    const stats = { processed: 0, sent: 0, errors: 0 };
+    
+    try {
+      const now = new Date();
+      // Add 330 minutes to get local IST representation
+      const istNow = new Date(now.getTime() + 330 * 60000);
+      const dateStr = istNow.toISOString().split('T')[0];
+
+      // Get all confirmed bookings for today with assigned workers where worker pre-service reminder is not sent
+      const bookings = await this.bookingsRepository
+        .createQueryBuilder('booking')
+        .leftJoinAndSelect('booking.user', 'user')
+        .leftJoinAndSelect('booking.worker', 'worker')
+        .leftJoinAndSelect('booking.service', 'service')
+        .leftJoinAndSelect('booking.location', 'location')
+        .where('booking.status = :status', { status: 'confirmed' })
+        .andWhere('booking.date = :dateStr', { dateStr })
+        .andWhere('booking.workerId IS NOT NULL')
+        .andWhere('(booking.workerPreServiceReminderSent IS NOT TRUE OR booking.workerPreServiceReminderSent = false)')
+        .getMany();
+
+      stats.processed = bookings.length;
+
+      for (const booking of bookings) {
+        try {
+          if (!booking.startTime || !booking.worker) continue;
+
+          // Parse startTime like "10:30:00"
+          const parts = booking.startTime.split(':');
+          const bookingHour = parseInt(parts[0] || '0', 10);
+          const bookingMin = parseInt(parts[1] || '0', 10);
+
+          const bookingTimeInMinutes = bookingHour * 60 + bookingMin;
+          const istNowInMinutes = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();
+          const diffMinutes = bookingTimeInMinutes - istNowInMinutes;
+
+          // Trigger worker reminder exactly 20 minutes before (between 15 and 25 minutes window)
+          if (diffMinutes >= 15 && diffMinutes <= 25) {
+            await this.notifyWorkerUpcomingBooking(booking.worker, booking);
+            
+            // Mark reminder as sent
+            booking.workerPreServiceReminderSent = true;
+            await this.bookingsRepository.save(booking);
+            stats.sent++;
+          }
+        } catch (bookingError) {
+          stats.errors++;
+          this.logger.error(`Failed processing worker reminder for booking ${booking.id}`, bookingError);
+        }
+      }
+
+      return {
+        success: stats.errors === 0,
+        ...stats
+      };
+    } catch (globalError) {
+      this.logger.error('Fatal failure in worker pre-service reminder check', globalError);
+      return { success: false, processed: 0, sent: 0, errors: 1 };
+    }
+  }
+
+  async notifyWorkerUpcomingBooking(worker: Worker, booking: Booking): Promise<void> {
+    if (!worker.fcmToken) {
+      console.error(`[NOTIFICATION FAILURE] No FCM token for worker ${worker.id} for upcoming reminder`);
+      return;
+    }
+
+    const serviceName = booking.service?.name || 'Service';
+    const timeString = this.formatTime(booking.startTime);
+    const address = booking.location?.address || 'N/A';
+    const notificationTitle = 'नया काम शुरू होने वाला है!';
+    const notificationBody = `Reminder: ${serviceName} booking at ${timeString}. Address: ${address}`;
+
+    await this.sendFullScreenPushNotification(
+      worker.fcmToken,
+      notificationTitle,
+      notificationBody,
+      {
+        type: 'upcoming_reminder',
+        bookingId: booking.id.toString(),
+        serviceName,
+        serviceDate: booking.date ?? '',
+        startTime: booking.startTime ?? '',
+        customerName: booking.user?.firstName ?? 'Customer',
+        customerAddress: address,
+        price: booking.amount?.toString() ?? '0',
+        fullScreen: 'true',
+        timestamp: new Date().toISOString(),
+      }
+    );
   }
 
   private async determineReminderType(

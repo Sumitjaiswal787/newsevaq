@@ -116,6 +116,9 @@ export class Booking {
   @Column({ type: 'boolean', default: false })
   preServiceReminderSent: boolean;
 
+  @Column({ type: 'boolean', default: false, nullable: true })
+  workerPreServiceReminderSent: boolean;
+
   @ManyToOne(() => Service, { nullable: true })
   @JoinColumn({ name: 'serviceId' })
   service: Service;

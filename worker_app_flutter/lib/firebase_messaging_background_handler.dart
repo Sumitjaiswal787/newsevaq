@@ -21,6 +21,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   if (data['type'] == 'new_booking' ||
       data['type'] == 'booking_assigned' ||
+      data['type'] == 'upcoming_reminder' ||
       isFullScreen) {
     await _showFullScreenBookingNotification(message);
   }
@@ -39,7 +40,7 @@ Future<void> _showFullScreenBookingNotification(RemoteMessage message) async {
 
     await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 
-    // Create full-screen notification channel with IMPORTANCE_MAX
+    // Create full-screen notification channel with IMPORTANCE_MAX and custom sound
     const androidChannel = AndroidNotificationChannel(
       'full_screen_booking_channel',
       'Critical Booking Alerts',
@@ -50,6 +51,7 @@ Future<void> _showFullScreenBookingNotification(RemoteMessage message) async {
       enableVibration: true,
       enableLights: true,
       showBadge: true,
+      sound: RawResourceAndroidNotificationSound('rapido_alert'),
     );
 
     await flutterLocalNotificationsPlugin
@@ -123,7 +125,7 @@ Future<void> _showNativeFullScreenNotification({
   // and the notification priority/importance settings
   final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
-  // Create a high-priority Android notification with alarm category
+  // Create a high-priority Android notification with alarm category and custom sound
   // This ensures it shows as a heads-up notification and can wake the screen
   final androidDetails = AndroidNotificationDetails(
     'full_screen_booking_channel',
@@ -136,6 +138,7 @@ Future<void> _showNativeFullScreenNotification({
     autoCancel: true,
     ongoing: false,
     playSound: true,
+    sound: const RawResourceAndroidNotificationSound('rapido_alert'),
     enableVibration: true,
     enableLights: true,
     ticker: 'New booking assigned!',

@@ -152,9 +152,7 @@ class NotificationService {
       playSound: true,
       enableVibration: true,
       enableLights: true,
-      // Use default system notification sound
-      // For custom sound, place file in android/app/src/main/res/raw/booking_alert.mp3
-      // and use: sound: RawResourceAndroidNotificationSound('booking_alert'),
+      sound: RawResourceAndroidNotificationSound('rapido_alert'),
     );
 
     await _localNotifications
@@ -173,25 +171,13 @@ class NotificationService {
       enableVibration: true,
       enableLights: true,
       showBadge: true,
+      sound: RawResourceAndroidNotificationSound('rapido_alert'),
     );
 
     await _localNotifications
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(fullScreenChannel);
-
-    
-    const upcomingChannel = AndroidNotificationChannel(
-      upcomingJobChannelId,
-      'Upcoming Job Reminders',
-      description: 'Alerts you 30 minutes before a job starts',
-      importance: Importance.max,
-      playSound: true,
-      enableVibration: true,
-    );
-    await _localNotifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(upcomingChannel);
 
     debugPrint('=== Created notification channel: $newBookingChannelId ===');
     debugPrint('=== Created full-screen channel: $fullScreenChannelId ===');
@@ -220,11 +206,13 @@ class NotificationService {
       autoCancel: true,
       ongoing: false,
       playSound: true,
+      sound: const RawResourceAndroidNotificationSound('rapido_alert'),
       enableVibration: true,
       enableLights: true,
       ticker: 'New booking assigned!',
+      icon: '@mipmap/ic_launcher',
       fullScreenIntent: true,
-      additionalFlags: Int32List.fromList(<int>[4]), // FLAG_INSISTENT loops sound
+      additionalFlags: Int32List.fromList(<int>[4]), // loops sound
     );
 
     final notificationDetails = NotificationDetails(
@@ -354,79 +342,8 @@ class NotificationService {
   
   /// Schedule a reminder 30 minutes before the job starts
   Future<void> scheduleBookingReminder(Booking booking) async {
-    try {
-      if (booking.scheduledDate.isEmpty || booking.startTime.isEmpty) return;
-
-      final now = DateTime.now();
-      
-      // Parse scheduledDate
-      final dateParts = booking.scheduledDate.split('-');
-      if (dateParts.length != 3) return;
-      final year = int.parse(dateParts[0]);
-      final month = int.parse(dateParts[1]);
-      final day = int.parse(dateParts[2]);
-
-      // Parse startTime (e.g. "08:30" or "08:30 AM")
-      int hour = 0;
-      int minute = 0;
-      final timeStr = booking.startTime.toLowerCase();
-      
-      final isPM = timeStr.contains('pm');
-      final cleanTime = timeStr.replaceAll(RegExp(r'[^0-9:]'), '').trim();
-      final timeParts = cleanTime.split(':');
-      
-      if (timeParts.isNotEmpty) {
-        hour = int.parse(timeParts[0]);
-        if (isPM && hour < 12) hour += 12;
-        if (!isPM && hour == 12) hour = 0;
-        
-        if (timeParts.length > 1) {
-          minute = int.parse(timeParts[1]);
-        }
-      }
-
-      final jobStartTime = DateTime(year, month, day, hour, minute);
-      final reminderTime = jobStartTime.subtract(const Duration(minutes: 30));
-
-      // Don't schedule if it's already past the reminder time
-      if (reminderTime.isBefore(now)) return;
-
-      // Use a consistent ID for this booking so we don't schedule duplicates
-      final notificationId = booking.id.hashCode;
-
-      final androidDetails = const AndroidNotificationDetails(
-        upcomingJobChannelId,
-        'Upcoming Job Reminders',
-        channelDescription: 'Alerts you 30 minutes before a job starts',
-        importance: Importance.max,
-        priority: Priority.max,
-        playSound: true,
-        enableVibration: true,
-      );
-
-      final details = NotificationDetails(
-        android: androidDetails,
-        iOS: const DarwinNotificationDetails(
-          presentAlert: true,
-          presentSound: true,
-        ),
-      );
-
-      await _localNotifications.zonedSchedule(
-        notificationId,
-        'Upcoming Job Reminder',
-        'Your ${booking.serviceName} job starts in 30 minutes!',
-        tz.TZDateTime.from(reminderTime, tz.local),
-        details,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation:
-            UILocalNotificationDateInterpretation.absoluteTime,
-      );
-
-      debugPrint('Scheduled reminder for booking ${booking.id} at $reminderTime');
-    } catch (e) {
-      debugPrint('Error scheduling reminder: $e');
-    }
+    // Local scheduling disabled to avoid duplicates and battery saver kills.
+    // Backend schedules and triggers all notifications exactly 20 minutes before.
   }
 
   /// Get FCM token
