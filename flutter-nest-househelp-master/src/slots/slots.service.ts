@@ -1,8 +1,11 @@
 import { Injectable, Logger, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThan, MoreThan, DataSource } from 'typeorm';
+import { Repository, Between, LessThan, MoreThan, DataSource, In } from 'typeorm';
 import { Slot } from './entities/slot.entity';
 import { Worker } from '../workers/entities/worker.entity';
+import { Booking, BookingStatus } from '../bookings/entities/booking.entity';
+import { Service } from '../services/entities/service.entity';
+
 
 @Injectable()
 export class SlotsService {
@@ -35,6 +38,39 @@ export class SlotsService {
    * Find available slots for a specific date and optional serviceId
    */
   async findAvailableByDate(date: Date, serviceId?: number, workerId?: number): Promise<Slot[]> {
+    // 1. Fetch requested service details to get its duration
+    let durationHours = 1;
+    if (serviceId) {
+      try {
+        const service = await this.dataSource.getRepository(Service).findOne({ where: { id: serviceId } });
+        if (service && service.duration) {
+          const rawDuration = Number(service.duration);
+          durationHours = rawDuration > 12
+            ? Math.min(Math.round(rawDuration / 60), 2)  // Convert minutes to hours, max 2h
+            : Math.min(rawDuration, 2);                    // Already hours, max 2h
+        }
+      } catch (e: any) {
+        this.logger.warn(`Could not resolve duration for service ${serviceId}: ${e.message}`);
+      }
+    }
+
+    // 2. Fetch candidate workers for this service
+    let workersQuery = this.dataSource.getRepository(Worker)
+      .createQueryBuilder('worker')
+      .leftJoinAndSelect('worker.services', 'services');
+
+    if (serviceId) {
+      workersQuery = workersQuery.where('services.id = :serviceId', { serviceId });
+    }
+    if (workerId) {
+      workersQuery = workersQuery.andWhere('worker.id = :workerId', { workerId });
+    }
+    const candidateWorkers = await workersQuery.getMany();
+    if (candidateWorkers.length === 0) {
+      return [];
+    }
+    const workerIds = candidateWorkers.map(w => w.id);
+
     // Adjust UTC date boundaries to match Asia/Kolkata (IST) timezone (GMT+5:30)
     // 00:00:00 IST is 18:30:00 UTC of the previous day
     const startOfDay = new Date(date);
@@ -45,21 +81,103 @@ export class SlotsService {
     endOfDay.setUTCHours(23, 59, 59, 999);
     endOfDay.setMinutes(endOfDay.getMinutes() - 330);
 
-    const qb = this.slotsRepository.createQueryBuilder('slot')
+    // 3. Fetch all slots for candidate workers on this day
+    const allSlots = await this.slotsRepository.createQueryBuilder('slot')
       .leftJoinAndSelect('slot.worker', 'worker')
       .where('slot.startTime BETWEEN :start AND :end', { start: startOfDay, end: endOfDay })
-      .andWhere('slot.isBooked = :isBooked', { isBooked: false })
-      .orderBy('slot.startTime', 'ASC');
+      .andWhere('worker.id IN (:...workerIds)', { workerIds })
+      .orderBy('slot.startTime', 'ASC')
+      .getMany();
 
-    if (serviceId) {
-      qb.innerJoin('worker.services', 'service', 'service.id = :serviceId', { serviceId });
-    }
-    
-    if (workerId) {
-      qb.andWhere('worker.id = :workerId', { workerId });
+    // 4. Fetch all active bookings on target date for candidate workers
+    const dateStr = new Date(date).toISOString().split('T')[0];
+    const activeBookings = await this.dataSource.getRepository(Booking)
+      .createQueryBuilder('booking')
+      .where('booking.workerId IN (:...workerIds)', { workerIds })
+      .andWhere('booking.date = :dateStr', { dateStr })
+      .andWhere('booking.status IN (:...statuses)', {
+        statuses: [BookingStatus.REQUESTED, BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS]
+      })
+      .getMany();
+
+    // Group slots and bookings by workerId
+    const slotsByWorker = new Map<number, Slot[]>();
+    for (const slot of allSlots) {
+      const wId = slot.worker.id;
+      if (!slotsByWorker.has(wId)) {
+        slotsByWorker.set(wId, []);
+      }
+      slotsByWorker.get(wId)!.push(slot);
     }
 
-    return qb.getMany();
+    const bookingsByWorker = new Map<number, Booking[]>();
+    for (const booking of activeBookings) {
+      const wId = booking.workerId;
+      if (!bookingsByWorker.has(wId)) {
+        bookingsByWorker.set(wId, []);
+      }
+      bookingsByWorker.get(wId)!.push(booking);
+    }
+
+    // Helper: convert Date to IST hours
+    const getISTHours = (d: Date): number => {
+      const istDate = new Date(d.getTime() + 330 * 60000);
+      return istDate.getUTCHours() + istDate.getUTCMinutes() / 60 + istDate.getUTCSeconds() / 3600;
+    };
+
+    // Helper: parse string times like "11:00:00" to fractional hours
+    const parseTimeToHours = (timeStr: string | Date): number => {
+      if (timeStr instanceof Date) {
+        return getISTHours(timeStr);
+      }
+      const parts = String(timeStr).split(':');
+      return parseInt(parts[0] || '0', 10) + parseInt(parts[1] || '0', 10) / 60 + parseInt(parts[2] || '0', 10) / 3600;
+    };
+
+    const isWorkerFreeForSlot = (wId: number, slot: Slot, durHours: number): boolean => {
+      const reqStart = getISTHours(slot.startTime);
+      const reqEnd = reqStart + durHours;
+
+      // Check Check 1: Booking Overlaps
+      const workerBookings = bookingsByWorker.get(wId) || [];
+      for (const b of workerBookings) {
+        const existStart = parseTimeToHours(b.startTime);
+        const existEnd = parseTimeToHours(b.endTime);
+        if (existStart < reqEnd && existEnd > reqStart) {
+          return false;
+        }
+      }
+
+      // Check Check 2: Consecutive slots must exist and be unbooked
+      const workerSlots = slotsByWorker.get(wId) || [];
+      const neededSlotsCount = durHours * 2;
+      const windowSlots = workerSlots.filter(s => 
+        s.startTime.getTime() >= slot.startTime.getTime() &&
+        s.endTime.getTime() <= slot.startTime.getTime() + durHours * 3600000
+      );
+
+      if (windowSlots.length < neededSlotsCount) {
+        return false;
+      }
+
+      if (windowSlots.some(s => s.isBooked)) {
+        return false;
+      }
+
+      return true;
+    };
+
+    const availableSlotsList: Slot[] = [];
+    for (const slot of allSlots) {
+      if (slot.isBooked) {
+        continue;
+      }
+      if (isWorkerFreeForSlot(slot.worker.id, slot, durationHours)) {
+        availableSlotsList.push(slot);
+      }
+    }
+
+    return availableSlotsList;
   }
 
   async findOne(id: number) {
@@ -122,20 +240,83 @@ export class SlotsService {
     );
 
     try {
-      // DEBUG: Log all slots for this worker on this day to see what's actually available
+      // Calculate duration of requested service in hours
+      const durationHours = Math.max(
+        Math.round((requestedEndTime.getTime() - requestedStartTime.getTime()) / 3600000),
+        1
+      );
+
+      // Fetch active bookings for this worker on target date
+      const dateStr = requestedStartTime.toISOString().split('T')[0];
+      const activeBookings = await this.dataSource.getRepository(Booking)
+        .createQueryBuilder('booking')
+        .where('booking.workerId = :workerId', { workerId })
+        .andWhere('booking.date = :dateStr', { dateStr })
+        .andWhere('booking.status IN (:...statuses)', {
+          statuses: [BookingStatus.REQUESTED, BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS]
+        })
+        .getMany();
+
+      // Fetch all slots of this worker on target date
       const startOfDay = new Date(requestedStartTime);
-      startOfDay.setHours(0, 0, 0, 0);
+      startOfDay.setUTCHours(0, 0, 0, 0);
+      startOfDay.setMinutes(startOfDay.getMinutes() - 330);
+
       const endOfDay = new Date(requestedStartTime);
-      endOfDay.setHours(23, 59, 59, 999);
-      
-      const allSlotsToday = await this.slotsRepository.find({
-        where: {
-          worker: { id: workerId },
-          startTime: Between(startOfDay, endOfDay),
+      endOfDay.setUTCHours(23, 59, 59, 999);
+      endOfDay.setMinutes(endOfDay.getMinutes() - 330);
+
+      const workerSlots = await this.slotsRepository.createQueryBuilder('slot')
+        .where('slot.startTime BETWEEN :start AND :end', { start: startOfDay, end: endOfDay })
+        .andWhere('slot.workerId = :workerId', { workerId })
+        .orderBy('slot.startTime', 'ASC')
+        .getMany();
+
+      // Helper: convert Date to IST hours
+      const getISTHours = (d: Date): number => {
+        const istDate = new Date(d.getTime() + 330 * 60000);
+        return istDate.getUTCHours() + istDate.getUTCMinutes() / 60 + istDate.getUTCSeconds() / 3600;
+      };
+
+      // Helper: parse string times like "11:00:00" to fractional hours
+      const parseTimeToHours = (timeStr: string | Date): number => {
+        if (timeStr instanceof Date) {
+          return getISTHours(timeStr);
         }
-      });
-      
-      this.logger.log(`🔍 DEBUG: Worker ${workerId} has ${allSlotsToday.length} slots today. First slot: ${allSlotsToday.length > 0 ? allSlotsToday[0].startTime.toISOString() + ' to ' + allSlotsToday[0].endTime.toISOString() : 'none'}`);
+        const parts = String(timeStr).split(':');
+        return parseInt(parts[0] || '0', 10) + parseInt(parts[1] || '0', 10) / 60 + parseInt(parts[2] || '0', 10) / 3600;
+      };
+
+      const isSlotFree = (slot: Slot): boolean => {
+        const reqStart = getISTHours(slot.startTime);
+        const reqEnd = reqStart + durationHours;
+
+        // Check 1: Booking Overlaps
+        for (const b of activeBookings) {
+          const existStart = parseTimeToHours(b.startTime);
+          const existEnd = parseTimeToHours(b.endTime);
+          if (existStart < reqEnd && existEnd > reqStart) {
+            return false;
+          }
+        }
+
+        // Check 2: Consecutive slots must exist and be unbooked
+        const neededSlotsCount = durationHours * 2;
+        const windowSlots = workerSlots.filter(s => 
+          s.startTime.getTime() >= slot.startTime.getTime() &&
+          s.endTime.getTime() <= slot.startTime.getTime() + durationHours * 3600000
+        );
+
+        if (windowSlots.length < neededSlotsCount) {
+          return false;
+        }
+
+        if (windowSlots.some(s => s.isBooked)) {
+          return false;
+        }
+
+        return true;
+      };
 
       // 1. First try exact match
       const exactMatch = await this.findAvailableSlot(
@@ -143,7 +324,7 @@ export class SlotsService {
         requestedStartTime,
         requestedEndTime,
       );
-      if (exactMatch) {
+      if (exactMatch && isSlotFree(exactMatch)) {
         this.logger.log(`Found exact match for worker ${workerId}`);
         return exactMatch;
       }
@@ -179,11 +360,11 @@ export class SlotsService {
         `🔍 DEBUG: Found ${flexibleSlots.length} slots for worker ${workerId} in flexible search`,
       );
 
-      if (flexibleSlots.length > 0) {
-        this.logger.log(
-          `Found ${flexibleSlots.length} flexible slots for worker ${workerId}`,
-        );
-        return flexibleSlots[0]; // Return the earliest available slot
+      for (const slot of flexibleSlots) {
+        if (isSlotFree(slot)) {
+          this.logger.log(`Found flexible match for worker ${workerId}`);
+          return slot;
+        }
       }
 
       if (disableSameDayFallback) {
@@ -219,11 +400,11 @@ export class SlotsService {
         `🔍 DEBUG: Found ${sameDaySlots.length} same-day slots for worker ${workerId}`,
       );
 
-      if (sameDaySlots.length > 0) {
-        this.logger.log(
-          `Found ${sameDaySlots.length} same-day slots for worker ${workerId}`,
-        );
-        return sameDaySlots[0];
+      for (const slot of sameDaySlots) {
+        if (isSlotFree(slot)) {
+          this.logger.log(`Found same-day fallback match for worker ${workerId}`);
+          return slot;
+        }
       }
 
       this.logger.log(`No flexible slots found for worker ${workerId}`);
