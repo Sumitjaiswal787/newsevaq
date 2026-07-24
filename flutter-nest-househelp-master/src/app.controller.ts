@@ -11,8 +11,7 @@ import { DataSource } from 'typeorm';
 import { AdminGuard } from './auth/admin.guard';
 import { Booking } from './bookings/entities/booking.entity';
 import { Slot } from './slots/entities/slot.entity';
-import { SubscriptionsService } from './subscriptions/subscriptions.service';
-import { OnDemandAssignmentScheduler } from './subscriptions/on-demand-assignment.scheduler';
+
 
 @Controller()
 export class AppController {
@@ -20,8 +19,6 @@ export class AppController {
     private readonly appService: AppService,
     private readonly healthService: HealthService,
     @Inject(DataSource) private readonly dataSource: DataSource,
-    private readonly subscriptionsService: SubscriptionsService,
-    private readonly onDemandAssignmentScheduler: OnDemandAssignmentScheduler,
   ) {}
 
   @Get('purge-all-bookings-now')
@@ -207,130 +204,7 @@ export class AppController {
     return { message: 'Seeding complete', results };
   }
 
-  @Get('assignment-diagnostics')
-  async getAssignmentDiagnostics() {
-    const ds = this.dataSource;
-    const errors: any = {};
-    
-    let bookings = [];
-    try {
-      bookings = await ds.query(`
-        SELECT id, status, type, "userId", "workerId", "serviceId", "slotId", date, "startTime", "endTime", "assignmentState", "assignmentReason", "createdAt"
-        FROM booking
-        ORDER BY "createdAt" DESC
-        LIMIT 10
-      `);
-    } catch (e: any) {
-      errors.bookings = e.message;
-    }
 
-    let serviceRequests = [];
-    try {
-      serviceRequests = await ds.query(`
-        SELECT id, "assignmentStatus" AS status, "userId", "serviceProfileId", date, "timeWindow", "createdAt"
-        FROM service_requests
-        ORDER BY "createdAt" DESC
-        LIMIT 10
-      `);
-    } catch (e: any) {
-      errors.serviceRequests = e.message;
-    }
-
-    let subscriptions = [];
-    try {
-      subscriptions = await ds.query(`
-        SELECT id, status, "userId", "serviceProfileId", "startDate", "endDate", "preferredtimewindow" AS "preferredTimeWindow", "custom_plan_data" AS "customPlanData", location
-        FROM subscriptions
-        ORDER BY "createdAt" DESC
-        LIMIT 10
-      `);
-    } catch (e: any) {
-      errors.subscriptions = e.message;
-    }
-
-    let subscriber = null;
-    try {
-      if (subscriptions.length > 0) {
-        const sub = subscriptions[0];
-        const res = await ds.query(`
-          SELECT id, role, email, phone, "firstName", "lastName", "publicId"
-          FROM "user"
-          WHERE "publicId"::text = '${sub.userId}'
-        `);
-        subscriber = res[0] || null;
-      }
-    } catch (e: any) {
-      errors.subscriber = e.message;
-    }
-
-    let workersCount = [];
-    try {
-      workersCount = await ds.query(`SELECT COUNT(*) FROM worker`);
-    } catch (e: any) {
-      errors.workers = e.message;
-    }
-
-    let slotsCount = [];
-    try {
-      slotsCount = await ds.query(`SELECT COUNT(*) FROM slot`);
-    } catch (e: any) {
-      errors.slots = e.message;
-    }
-
-    let users = [];
-    try {
-      users = await ds.query(`
-        SELECT id, role, email, phone, "firstName", "lastName", "createdAt"
-        FROM "user"
-        ORDER BY "createdAt" DESC
-        LIMIT 10
-      `);
-    } catch (e: any) {
-      errors.users = e.message;
-    }
-
-    let tables = [];
-    try {
-      tables = await ds.query(`
-        SELECT table_name 
-        FROM information_schema.tables 
-        WHERE table_schema='public'
-      `);
-    } catch (e: any) {
-      errors.tables = e.message;
-    }
-
-    return {
-      errors,
-      tables,
-      bookings,
-      serviceRequests,
-      subscriptions,
-      subscriber,
-      users,
-      workersCount,
-      slotsCount
-    };
-  }
-
-  @Get('trigger-bookings-gen')
-  async triggerBookingsGen() {
-    try {
-      await this.subscriptionsService.generateBookingsForSubscription(11, new Date('2026-07-25'));
-      return { success: true, message: 'Bookings generation triggered successfully' };
-    } catch (e: any) {
-      return { success: false, error: e.message, stack: e.stack };
-    }
-  }
-  @Get('trigger-assignment')
-  async triggerAssignment() {
-    try {
-      await this.onDemandAssignmentScheduler.handleOnDemandAssignments();
-      return { success: true, message: 'Assignment scheduler triggered successfully' };
-    } catch (e: any) {
-      return { success: false, error: e.message, stack: e.stack };
-    }
-  }
   @Post('reset-production-database')
   @UseGuards(AdminGuard)
   async resetProductionDatabase() {
