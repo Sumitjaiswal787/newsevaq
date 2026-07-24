@@ -224,7 +224,7 @@ export class AppController {
     try {
       serviceRequests = await ds.query(`
         SELECT id, status, "userId", "serviceProfileId", date, "timeWindow", "createdAt"
-        FROM service_request
+        FROM service_requests
         ORDER BY "createdAt" DESC
         LIMIT 10
       `);
@@ -236,7 +236,7 @@ export class AppController {
     try {
       subscriptions = await ds.query(`
         SELECT id, status, "userId", "serviceProfileId", "startDate", "endDate", "frequency", "customPlanData"
-        FROM subscription
+        FROM subscriptions
         ORDER BY "createdAt" DESC
         LIMIT 10
       `);
@@ -272,15 +272,8 @@ export class AppController {
 
     let workerLocks = [];
     try {
-      workerLocks = await ds.query(`
-        SELECT *
-        FROM "worker_temporary_lock"
-        ORDER BY "createdAt" DESC
-        LIMIT 10
-      `);
-    } catch (e: any) {
-      errors.workerLocks = e.message;
-    }
+      // WorkerTemporaryLock is a frontend lock, but let's clear error tracking for it
+    } catch (e: any) {}
 
     return {
       errors,
