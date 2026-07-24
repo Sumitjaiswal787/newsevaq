@@ -297,6 +297,30 @@ export class AppController {
       logs.push(`Found corresponding user IDs: ${otherUserIds.join(', ')}`);
 
       if (otherWorkerIds.length > 0) {
+        // A. Clear references to slots from booking table first
+        try {
+          const res = await ds.query(`
+            UPDATE booking 
+            SET "slotId" = NULL 
+            WHERE "slotId" IN (SELECT id FROM slot WHERE "workerId" IN (${otherWorkerIds.join(',')}))
+          `);
+          logs.push(`✅ Cleared slotId references from bookings: ${res[1] || res.rowCount || 0}`);
+        } catch (e: any) {
+          logs.push(`❌ Clear slotId from bookings error: ${e.message}`);
+        }
+
+        // B. Clear references to worker from subscriptions table first
+        try {
+          const res = await ds.query(`
+            UPDATE subscriptions 
+            SET "assignedWorkerId" = NULL 
+            WHERE "assignedWorkerId" IN (${otherWorkerIds.join(',')})
+          `);
+          logs.push(`✅ Cleared assignedWorkerId references from subscriptions: ${res[1] || res.rowCount || 0}`);
+        } catch (e: any) {
+          logs.push(`❌ Clear assignedWorkerId from subscriptions error: ${e.message}`);
+        }
+
         // 1. Delete from slot
         try {
           const res = await ds.query(`DELETE FROM slot WHERE "workerId" IN (${otherWorkerIds.join(',')})`);
