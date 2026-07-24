@@ -10,6 +10,8 @@ This file documents all design system alignments, UI restyling, API integrations
 - **Duration-Based Slot Availability**: Refactored `SlotsService.findAvailableByDate` to load the requested service's duration (clamping to max 2 hours) and filter available slots. A slot is only returned if there are enough consecutive free slots to satisfy the entire duration.
 - **Booking Overlap Verification**: Implemented active booking overlap checks in both `findAvailableByDate` (for available slots list) and `findAvailableSlotFlexible` (for flexible worker checkout) using the canonical interval overlap formula (`existStart < reqEnd AND existEnd > reqStart`).
 - **Worker App Booking Duration Display**: Prioritized the booking's own `startTime` and `endTime` fields over availability slot bounds to ensure the worker app displays the correct service duration (e.g. 1 hour instead of 30 minutes).
+- **Post-Booking 30-Minute Travel/Cleaning Buffer**: Added a 30-minute (`0.5` hours) travel and cleaning buffer after existing bookings in all overlap calculations (`findAvailableByDate`, `findAvailableSlotFlexible`, and `findBestWorker`). This correctly blocks time windows that overlap with the worker's transit time (e.g., blocking `10:00 AM - 11:30 AM` for a booking starting at `10:30 AM`).
+- **Cooking Service Default Duration Update**: Updated the database default duration of the `Cooking Service` (serviceId = 1) from 2 hours to 1 hour to align with user expectations for standard slots.
 
 ## [1.0.22] - 2026-07-23
 

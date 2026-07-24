@@ -282,21 +282,4 @@ export class AppController {
       return { message: 'Error updating locations', error: e.message };
     }
   }
-
-  @Get('update-service-duration')
-  async updateServiceDuration() {
-    try {
-      const result = await this.dataSource.query(`
-        UPDATE service
-        SET duration = 1
-        WHERE id = 1
-      `);
-      const checkRes = await this.dataSource.query(`
-        SELECT id, name, duration FROM service WHERE id = 1
-      `);
-      return { success: true, result, verified: checkRes };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  }
 }
