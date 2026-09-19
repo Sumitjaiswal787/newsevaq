@@ -56,13 +56,13 @@ export class AuthService {
       role: user.role,
     };
 
-    // Generate access token (short-lived, e.g., 1 hour)
-    const accessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
+    // Generate access token (effectively no expiration, e.g. 10 years)
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '3650d' });
 
-    // Generate refresh token (long-lived, e.g., 30 days)
+    // Generate refresh token (effectively no expiration, e.g. 10 years)
     const refreshToken = new RefreshToken();
     refreshToken.userId = user.id;
-    refreshToken.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+    refreshToken.expiresAt = new Date(Date.now() + 3650 * 24 * 60 * 60 * 1000); // 3650 days
     refreshToken.userAgent = userAgent ?? '';
     refreshToken.ipAddress = ipAddress ?? '';
     await this.refreshTokenRepository.save(refreshToken);
@@ -97,13 +97,13 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    // Generate new access token
+    // Generate new access token (effectively no expiration)
     const payload = {
       email: user.email,
       sub: user.publicId,
       role: user.role,
     };
-    const newAccessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
+    const newAccessToken = this.jwtService.sign(payload, { expiresIn: '3650d' });
 
     // Rotate refresh token: revoke old one, create new one
     refreshToken.isRevoked = true;
@@ -111,7 +111,7 @@ export class AuthService {
 
     const newRefreshToken = new RefreshToken();
     newRefreshToken.userId = user.id;
-    newRefreshToken.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    newRefreshToken.expiresAt = new Date(Date.now() + 3650 * 24 * 60 * 60 * 1000); // 3650 days
     await this.refreshTokenRepository.save(newRefreshToken);
 
     return {
